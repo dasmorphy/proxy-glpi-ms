@@ -1,12 +1,20 @@
 openapi: 3.0.3
 info:
   title: proxy-glpi-ms
-  description: Proxy Glpi microservice
+  description: Proxy transparente para los endpoints REST de GLPI
   version: 1.0.0
 servers:
 - url: /rest/proxy-glpi-api/v1.0/
 paths:
   /glpi-by-pass:
+    parameters:
+    - name: endpoint
+      in: query
+      required: true
+      description: Endpoint relativo de GLPI, por ejemplo Ticket/123
+      schema:
+        type: string
+        minLength: 1
     get:
       tags:
       - Glpi by Pass
@@ -68,11 +76,6 @@ paths:
       summary: Metodos post para apis de glpi
       description: Realiza post para todas las apis del glpi
       operationId: post_glpi
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RequestPostLogbookEntry"
       responses:
         "200":
           description: OK
@@ -253,4 +256,3 @@ components:
         externalTransactionId:
           type: string
           example: fcea920f7412b5da7be0cf42b8c9375
-

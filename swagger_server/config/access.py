@@ -26,14 +26,14 @@ def access():
         "PASSWORDS": {
             "ENCRYPTION": os.getenv('ENCRYPTION').strip("'")
         },
-        "RABBITMQ": {
-            "HOST": os.getenv('RABBITMQ_HOST'),
-            "PORT": os.getenv('RABBIT_PORT'),
-            "VHOST": os.getenv('RABBIT_VHOST'),
-            "USER": os.getenv('RABBIT_USER'),
-            "PASS": os.getenv('RABBITMQ_PASS').strip("'")
-        }
+        "GLPI": {
+            "API": os.getenv("API_GLPI"),
+            "APP_TOKEN": os.getenv("APP_TOKEN"),
+            "USER_TOKEN_SESSION": os.getenv("USER_TOKEN_SESSION"),
+            "TIMEOUT": float(os.getenv("GLPI_TIMEOUT", "30")),
+        },
     }
+
 
 def access_mode():
     return access()

@@ -11,6 +11,22 @@ This example uses the [Connexion](https://github.com/zalando/connexion) library 
 Python 3.5.2+
 
 ## Usage
+
+Configure the GLPI and Redis environment variables (see `.env.example`). Every
+request is sent to `API_GLPI/<endpoint>` and the `endpoint` query parameter is
+not forwarded to GLPI. All other query parameters, request headers and the raw
+body are proxied.
+
+Example:
+
+```bash
+curl "http://localhost:2127/rest/proxy-glpi-api/v1.0/glpi-by-pass?endpoint=Ticket/123&expand_dropdowns=true"
+```
+
+The proxy always replaces `App-Token` and `Session-Token` with its configured
+application token and the session token stored in Redis. A missing token, or a
+401 response from GLPI, triggers `initSession` and one retry.
+
 To run the server, please execute the following from the root directory:
 
 ```

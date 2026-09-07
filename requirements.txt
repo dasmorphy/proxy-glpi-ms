@@ -21,6 +21,7 @@ filelock==3.12.4
 Flask==2.2.5
 Flask-Cors==4.0.0
 Flask-RESTful==0.3.10
+Flask-SQLAlchemy==3.0.5
 frozenlist==1.4.0
 gunicorn==21.2.0
 h11==0.14.0

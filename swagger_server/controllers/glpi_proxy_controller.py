@@ -1,62 +1,70 @@
-from asyncio.log import logger
+from timeit import default_timer
 
 import connexion
+from flask import g
 from flask.views import MethodView
-import six
+from flask import request
+from loguru import logger
 
-from swagger_server.models.generic_response import GenericResponse  # noqa: E501
-from swagger_server.models.request_post_logbook_entry import RequestPostLogbookEntry  # noqa: E501
-from swagger_server.models.response_error import ResponseError  # noqa: E501
-from swagger_server.models.response_post_logbook_entry import ResponsePostLogbookEntry  # noqa: E501
-from swagger_server.models.response_post_logbook_out import ResponsePostLogbookOut  # noqa: E501
-from swagger_server import util
+from swagger_server.exception.custom_error_exception import CustomAPIException
+from swagger_server.uses_cases.proxy_use_case import ProxyUseCase
+from swagger_server.utils.transactions.transaction import generate_internal_transaction_id
 
 
 class GlpiProxyView(MethodView):
     def __init__(self):
-        self.logger = logger
-        
+        self.proxy_use_case = ProxyUseCase()
 
-    def delete_glpi(external_transaction_id, channel):  # noqa: E501
-        """Metodos delete para apis de glpi
+    def _proxy(self, method, endpoint):
+        """Guarda la bitacora de ingreso en la base de datos.
 
-        Realiza delete para todas las apis del glpi # noqa: E501
-
-        :param external_transaction_id: 
-        :type external_transaction_id: str
-        :param channel: 
-        :type channel: str
-
-        :rtype: ResponsePostLogbookOut
-        """
-        return 'do some magic!'
-
-
-    def get_glpi(external_transaction_id, channel):  # noqa: E501
-        """Metodo para cualquier api get del glpi
-
-        Realiza consultas para todas las api get del glpi # noqa: E501
-
-        :param external_transaction_id: 
-        :type external_transaction_id: str
-        :param channel: 
-        :type channel: str
-
-        :rtype: GenericResponse
-        """
-        return 'do some magic!'
-
-
-    def post_glpi(body=None):  # noqa: E501
-        """Metodos post para apis de glpi
-
-        Realiza post para todas las apis del glpi # noqa: E501
+        Guardado de bitacora de ingreso # noqa: E501
 
         :param body: 
         :type body: dict | bytes
 
         :rtype: ResponsePostLogbookEntry
         """
-        if connexion.request.is_json:
-            body = RequestPostLogbookEntry.from_dict(connexion.request.get_json())  # noqa: E501
-        return 'do some magic!'
+        internal_process = (None, None)
+        response = {}
+        status_code = 500
+        try:
+            # body = request.get_json() 
+            start_time = default_timer()
+            internal_transaction_id = str(generate_internal_transaction_id())
+
+            external_transaction_id = request.headers.get('externalTransactionId')
+            internal_process = (internal_transaction_id, external_transaction_id)
+            response["internal_transaction_id"] = internal_transaction_id
+            response["external_transaction_id"] = external_transaction_id
+            message = f"start request: {method}, channel: {request.headers.get('channel')}"
+            logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+            api = self.proxy_use_case.proxy(
+                method=method,
+                endpoint=endpoint,
+                incoming_request=connexion.request,
+                internal=getattr(g, "internal", None),
+                external=getattr(g, "external", None),
+            )
+            response["error_code"] = 0
+            response["data"] = api.get_json()
+            response["message"] = "Datos obtenidos correctamente"
+            end_time = default_timer()
+            logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                        internal=internal_transaction_id, external=request.headers.get('externalTransactionId'))
+            status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, method, internal_process)
+            
+        return response, status_code
+
+    def delete_glpi(self, endpoint, **kwargs):
+        return self._proxy("DELETE", endpoint)
+
+    def get_glpi(self, endpoint, **kwargs):
+        return self._proxy("GET", endpoint)
+
+    def post_glpi(self, endpoint, body=None, **kwargs):
+        # El proxy usa los bytes originales para preservar JSON, formularios,
+        # multipart y cualquier otro tipo de contenido.
+        return self._proxy("POST", endpoint)

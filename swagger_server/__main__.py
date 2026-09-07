@@ -46,12 +46,14 @@ def custom_error_handler(error):
             detail = str(error)
 
         title = getattr(error, 'title', None)
-        status = getattr(error, 'status', status_code)
+        status = getattr(error, 'status_code', getattr(error, 'status', status_code))
         # print(type(error))
 
         status_code = status
         # print(detail, title, status)
         error_response.message = detail
+        if getattr(error, 'data', None) is not None:
+            error_response.data = error.data
     except:
         error_response.message = message
     finally:

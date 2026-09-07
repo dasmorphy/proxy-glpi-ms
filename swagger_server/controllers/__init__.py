@@ -11,10 +11,15 @@ def clear_context(response):
     """"""
 
     # Se agregan headers en response
-    response.headers['X-Channel'] = g.channel
-    response.headers['X-System'] = g.system
-    response.headers['X-External-Transaction-Id'] = g.external
-    response.headers['X-Internal-Transaction-Id'] = g.internal
+    context_headers = {
+        "X-Channel": getattr(g, "channel", None),
+        "X-System": getattr(g, "system", None),
+        "X-External-Transaction-Id": getattr(g, "external", None),
+        "X-Internal-Transaction-Id": getattr(g, "internal", None),
+    }
+    for name, value in context_headers.items():
+        if value is not None:
+            response.headers[name] = value
 
     return response
 
