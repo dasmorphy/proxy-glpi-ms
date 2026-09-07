@@ -1,0 +1,256 @@
+openapi: 3.0.3
+info:
+  title: proxy-glpi-ms
+  description: Proxy Glpi microservice
+  version: 1.0.0
+servers:
+- url: /rest/proxy-glpi-api/v1.0/
+paths:
+  /glpi-by-pass:
+    get:
+      tags:
+      - Glpi by Pass
+      summary: Metodo para cualquier api get del glpi
+      description: Realiza consultas para todas las api get del glpi
+      operationId: get_glpi
+      parameters:
+      - name: externalTransactionId
+        in: header
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+      - name: channel
+        in: header
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          example: ZENTINEL
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Glpi by Pass
+      summary: Metodos post para apis de glpi
+      description: Realiza post para todas las apis del glpi
+      operationId: post_glpi
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestPostLogbookEntry"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsePostLogbookEntry"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    delete:
+      tags:
+      - Glpi by Pass
+      summary: Metodos delete para apis de glpi
+      description: Realiza delete para todas las apis del glpi
+      operationId: delete_glpi
+      parameters:
+      - name: externalTransactionId
+        in: header
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+      - name: channel
+        in: header
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          example: ZENTINEL
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsePostLogbookOut"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+components:
+  schemas:
+    RequestPostLogbookEntry:
+      properties:
+        data:
+          type: object
+        channel:
+          type: string
+          example: ZENTINEL
+        externalTransactionId:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+    ResponsePostLogbookEntry:
+      properties:
+        errorCode:
+          type: integer
+          example: 0
+        message:
+          type: string
+          example: Bitacora de ingreso subido de forma exitosa.
+        internalTransactionId:
+          type: string
+          example: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+      example:
+        errorCode: 0
+        internalTransactionId: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId: fcea920f7412b5da7be0cf42b8c93759
+        message: Bitacora de ingreso subido de forma exitosa.
+    ResponsePostLogbookOut:
+      properties:
+        errorCode:
+          type: integer
+          example: 0
+        message:
+          type: string
+          example: Bitacora de salida subida de forma exitosa.
+        internalTransactionId:
+          type: string
+          example: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+      example:
+        errorCode: 0
+        internalTransactionId: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId: fcea920f7412b5da7be0cf42b8c93759
+        message: Bitacora de ingreso subido de forma exitosa.
+    GenericResponse:
+      properties:
+        data:
+          type: object
+          nullable: true
+          example: Estructura generica.
+        errorCode:
+          type: integer
+          example: 0
+        message:
+          type: string
+          example: Mensaje generico.
+        internalTransactionId:
+          type: string
+          example: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c93759
+      example:
+        errorCode: 0
+        internalTransactionId: d290f1ee-6c54-4b01-90e6-d701748f0851
+        externalTransactionId: fcea920f7412b5da7be0cf42b8c93759
+        message: Mensaje generico.
+        data: {}
+    ResponseError:
+      type: object
+      properties:
+        errorCode:
+          type: integer
+        internalTransactionId:
+          type: string
+        externalTransactionId:
+          type: string
+        message:
+          type: string
+    RequestGeneric:
+      properties:
+        channel:
+          type: string
+          example: ZENTINEL
+        externalTransactionId:
+          type: string
+          example: fcea920f7412b5da7be0cf42b8c9375
+
