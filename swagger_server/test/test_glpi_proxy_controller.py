@@ -3,9 +3,13 @@
 from __future__ import absolute_import
 
 import unittest
+from timeit import default_timer
 
+from flask import Flask, Response, g
 from werkzeug.datastructures import Headers, MultiDict
 
+from swagger_server.controllers import clear_context
+from swagger_server.controllers.glpi_proxy_controller import GlpiProxyView
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.repository.proxy_repository import ProxyRepository
 from swagger_server.test import BaseTestCase
@@ -96,7 +100,60 @@ class FakeRepository:
         self.saved.append(token)
 
 
+class FakeControllerUseCase:
+    def proxy(self, **kwargs):
+        response = Response(b'{"ok":true}', status=207, content_type="application/json")
+        response.headers["X-GLPI"] = "forwarded"
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Content-Range"] = "0-9/25"
+        response.headers.add("Set-Cookie", "glpi-session=one")
+        response.headers.add("Set-Cookie", "glpi-preference=two")
+        return response
+
+
 class TestGlpiProxyController(BaseTestCase):
+    def test_controller_and_after_request_preserve_glpi_headers(self):
+        app = Flask(__name__)
+        view = GlpiProxyView.__new__(GlpiProxyView)
+        view.proxy_use_case = FakeControllerUseCase()
+
+        @app.before_request
+        def set_test_context():
+            g.start_time = default_timer()
+            g.internal = "internal-id"
+            g.external = "external-id"
+            g.channel = "test"
+            g.system = "tests"
+
+        app.after_request(clear_context)
+        app.add_url_rule(
+            "/proxy",
+            view_func=lambda: view._proxy("GET", "Ticket"),
+        )
+
+        response = app.test_client().get("/proxy")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {
+                "data": {"ok": True},
+                "error_code": 0,
+                "external_transaction_id": None,
+                "internal_transaction_id": response.json["internal_transaction_id"],
+                "message": "Datos obtenidos correctamente",
+            },
+            response.json,
+        )
+        self.assertEqual("forwarded", response.headers["X-GLPI"])
+        self.assertEqual("0-9/25", response.headers["Content-Range"])
+        self.assertEqual(
+            ["glpi-session=one", "glpi-preference=two"],
+            response.headers.getlist("Set-Cookie"),
+        )
+        self.assertEqual("application/json", response.content_type)
+        self.assertNotIn("Content-Encoding", response.headers)
+        self.assertEqual("internal-id", response.headers["X-Internal-Transaction-Id"])
+
     def test_forwards_headers_query_body_and_forces_glpi_tokens(self):
         repository = FakeRepository("cached-session")
         http = FakeHttpClient(

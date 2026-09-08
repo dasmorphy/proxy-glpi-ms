@@ -12,7 +12,7 @@ def log():
     os.makedirs(log_dir, exist_ok=True)
 
     rthandler = RotatingFileHandler(
-        os.path.join(log_dir, f'proxy-glpi-ms-{format_logger}.log'),
+        os.path.join(log_dir, f'proxy-glpi-api-{format_logger}.log'),
         maxBytes=2 * 1024 * 1024,
         backupCount=5,
     )

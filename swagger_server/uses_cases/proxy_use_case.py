@@ -188,14 +188,8 @@ class ProxyUseCase:
             raise CustomAPIException("No fue posible consumir el endpoint de GLPI", 502)
 
     def _to_flask_response(self, upstream_response):
-        raw_response = getattr(upstream_response, "raw", None)
-        if raw_response is not None:
-            body = raw_response.read(decode_content=False)
-        else:
-            body = upstream_response.content
-
         response = Response(
-            body,
+            upstream_response.content,
             status=upstream_response.status_code,
         )
 
