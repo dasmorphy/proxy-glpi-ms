@@ -6,12 +6,19 @@ load_dotenv()
 def access():
     return {
         "DB": {
-            "POSTGRESQL": {
-                "USER": os.getenv('POSTGRESQL_USER'),
-                "PASSWORD": os.getenv('POSTGRESQL_PASSWORD').strip("'"),
-                "HOST": os.getenv('POSTGRESQL_HOST'),
-                "PORT": os.getenv('POSTGRESQL_PORT'),
-                "DB": os.getenv('POSTGRESQL_DB')
+            "TELEARSEG": {
+                "USER": os.getenv('TELEARSEG_USER'),
+                "PASSWORD": os.getenv('TELEARSEG_PASSWORD').strip("'"),
+                "HOST": os.getenv('TELEARSEG_HOST'),
+                "PORT": os.getenv('TELEARSEG_PORT'),
+                "DB": os.getenv('TELEARSEG_DB')
+            },
+            "ZENTINEL": {
+                "USER": os.getenv('ZENTINEL_USER'),
+                "PASSWORD": os.getenv('ZENTINEL_PASSWORD').strip("'"),
+                "HOST": os.getenv('ZENTINEL_HOST'),
+                "PORT": os.getenv('ZENTINEL_PORT'),
+                "DB": os.getenv('ZENTINEL_DB')
             },
             "REDIS": {
                 "HOST": os.getenv('REDIS_HOST'),
@@ -22,9 +29,6 @@ def access():
                 "pool_recycle": 300,
                 "pool_pre_ping": True
             }
-        },
-        "PASSWORDS": {
-            "ENCRYPTION": os.getenv('ENCRYPTION').strip("'")
         },
         "GLPI": {
             "API": os.getenv("API_GLPI"),

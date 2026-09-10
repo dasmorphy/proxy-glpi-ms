@@ -1,0 +1,27 @@
+FROM python:3.10-slim
+
+# Configurar hora correcta servidor
+ENV TZ=America/Guayaquil
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Actualiza e instala paquetes necesarios OS
+RUN apt-get update \
+    && rm -rf /var/lib/apt/lists/*
+
+# Establecer directorio de trabajo
+WORKDIR /usr/src/app
+
+# Crear carpeta logs
+RUN mkdir -p /usr/src/app /usr/src/app/logs
+
+# Copiar archivos al contenedor
+COPY . /usr/src/app
+
+# Instalar librerias PYTHON
+RUN pip3 install --upgrade pip
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Exponer el puerto
+EXPOSE 2127
+
+CMD ["gunicorn", "--workers=2", "--worker-connections=400", "--bind", "0.0.0.0:2127", "--worker-class=sync", "--timeout=240", "swagger_server.__main__:app"]

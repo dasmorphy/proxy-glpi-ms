@@ -8,6 +8,7 @@ from loguru import logger
 from werkzeug.datastructures import Headers
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
+from swagger_server.uses_cases.internal_management_use_case import InternalManagementUseCase
 from swagger_server.uses_cases.proxy_use_case import ProxyUseCase
 from swagger_server.utils.transactions.transaction import generate_internal_transaction_id
 
@@ -23,6 +24,7 @@ class GlpiProxyView(MethodView):
 
     def __init__(self):
         self.proxy_use_case = ProxyUseCase()
+        self.internal_management_use_case = InternalManagementUseCase()
 
     def _proxy(self, method, endpoint):
         """Ejecuta el proxy y conserva sus headers en la respuesta estandar."""
@@ -76,3 +78,40 @@ class GlpiProxyView(MethodView):
         # El proxy usa los bytes originales para preservar JSON, formularios,
         # multipart y cualquier otro tipo de contenido.
         return self._proxy("POST", endpoint)
+
+    def post_ticket_technical(self, body=None):
+        """Guarda el ticket del area tecnica en la base de datos.
+
+        Guardado de ticket # noqa: E501
+
+        :param body: 
+        :type body: dict | bytes
+
+        :rtype: ResponseGeneric
+        """
+        internal_process = (None, None)
+        function_name = "post_ticket_technical"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.is_json:
+                body = connexion.request.get_json()  # noqa: E501
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = body.get("externalTransactionId")
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {body.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                self.internal_management_use_case.post_ticket_technical(body.get('data'), internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["message"] = "Registro creado correctamente"
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                    internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+            
+        return response, status_code

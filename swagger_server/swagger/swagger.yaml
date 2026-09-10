@@ -178,9 +178,51 @@ paths:
                 data:
                   type: object
                   properties:
-                    ticket_glpi_id:
+                    ticket_glpi:
                       type: integer
                       example: 1
+                    client_id:
+                      type: integer
+                      example: 1
+                    ubication_id:
+                      type: integer
+                      example: 1
+                    contact:
+                      type: string
+                      example: Daniel
+                    case_type:
+                      type: string
+                      example: Cotización
+                    priority:
+                      type: string
+                      example: Alta
+                    responsible:
+                      type: string
+                      example: Daniel
+                    management_status:
+                      type: string
+                      example: En proceso
+                    next_action:
+                      type: string
+                      example: Cotización
+                    commitment_date:
+                      type: string
+                      format: date-time
+                      example: 2024-06-01T12:00:00Z
+                    requires_material:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    requires_monitoring:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    status:
+                      type: string
+                      example: En proceso
+                    user:
+                      type: string
+                      example: dmales
                 channel:
                   type: string
                   example: TLSG_WEB
@@ -218,7 +260,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResponseError"
-      x-openapi-router-controller: swagger_server.controllers.employee_controller.EmployeeView
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
 components:
   schemas:
     RequestPostLogbookEntry:

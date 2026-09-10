@@ -1,0 +1,18 @@
+version: '3'
+services:
+    backend-test:
+        container_name: proxy-glpi-ms
+        build:
+          context: .
+          dockerfile: ./setup/dockerfile/dockerfile_prod
+        environment:
+          FLASK_DEBUG: true
+          FLASK_APP: swagger_server.__main__:app
+          FLASK_RUN_PORT: 2127
+          FLASK_RUN_HOST: 0.0.0.0
+          FLASK_RUN_RELOAD: 1
+        ports:
+            - "2127:2127"
+        restart: on-failure
+        volumes:
+            - .:/usr/src/app
