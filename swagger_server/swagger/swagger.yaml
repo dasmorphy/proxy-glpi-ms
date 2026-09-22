@@ -163,7 +163,385 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /generate-document-glpi:
+    get:
+      tags:
+      - Glpi Documents
+      summary: Descarga un documento de GLPI
+      description: Solo permite descargar Document/{id}?alt=media y devuelve el archivo binario como adjunto.
+      operationId: generate_document_glpi
+      parameters:
+      - name: endpoint
+        in: query
+        required: true
+        description: Endpoint de GLPI con el formato Document/2809?alt=media
+        schema:
+          type: string
+          pattern: '^Document/[0-9]+\?alt=media$'
+          example: Document/2809?alt=media
+      - name: externalTransactionId
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: channel
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Archivo descargable
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Endpoint de documento invalido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Documento no encontrado
+        "502":
+          description: No fue posible consumir GLPI
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /type-solution:
+    get:
+      tags:
+      - Catalogs
+      summary: Obtiene todos los tipos de soluciones de comercial
+      description: Devuelve todos los registros de la base
+      operationId: get_type_solution
+      parameters:
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /commercial-ticket-status:
+    get:
+      tags:
+      - Catalogs
+      summary: Obtiene todos los estados de comercial
+      description: Devuelve todos los registros de la base
+      operationId: get_commercial_ticket_status
+      parameters:
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /commercial-origin:
+    get:
+      tags:
+      - Catalogs
+      summary: Obtiene todos los origines de comercial
+      description: Devuelve todos los registros de la base
+      operationId: get_commercial_origin
+      parameters:
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /register-technical:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los tickets del área técnica
+      description: Devuelve los tickets técnicos registrados en la base
+      operationId: get_ticket_technical
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-21T00:00:00"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-22T00:00:00"
+        - name: ticket_technical_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: pending_commercial
+          in: query
+          required: false
+          schema:
+            type: boolean
+            example: true
+        - name: ticket_glpi
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1234
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: En proceso
+        - name: management_status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Pendiente
+        - name: case_type
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Incidente
+        - name: responsible
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ubication_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: priority
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Alta
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    put:
+      tags:
+      - Tickets Management
+      summary: Actualiza la gestión de un ticket técnico
+      operationId: put_ticket_technical
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  description: "ticket_glpi identifica el ticket; los demás campos del POST son opcionales."
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
+      responses:
+        "200":
+          description: Registro actualizado
+        "404":
+          description: Ticket o gestión no encontrada
+        "500":
+          description: Error interno
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
     post:
       tags:
       - Tickets Management
@@ -187,6 +565,12 @@ paths:
                     ubication_id:
                       type: integer
                       example: 1
+                    client_name:
+                      type: string
+                      example: TELEARGEG
+                    ubication_name:
+                      type: string
+                      example: GUAYAS
                     contact:
                       type: string
                       example: Daniel
@@ -202,6 +586,9 @@ paths:
                     management_status:
                       type: string
                       example: En proceso
+                    title_ticket:
+                      type: string
+                      example: Propuesta zentinel
                     next_action:
                       type: string
                       example: Cotización
@@ -217,7 +604,14 @@ paths:
                       type: boolean
                       nullable: true
                       example: true
+                    observations:
+                      type: string
+                      nullable: true
+                      example: Observaciones del ticket
                     status:
+                      type: string
+                      example: Listo para cotizar
+                    survey_status:
                       type: string
                       example: En proceso
                     user:
@@ -229,6 +623,782 @@ paths:
                 externalTransactionId:
                   type: string
                   example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /register-commercial:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los tickets del area comercial
+      description: Devuelve todos los tickets comerciales de la base
+      operationId: get_ticket_commercial
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-21T00:00:00"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-22T00:00:00"
+        - name: ticket_commercial_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ticket_glpi
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1234
+        - name: pending_financial
+          in: query
+          required: false
+          schema:
+            type: boolean
+            example: true
+        - name: assigned_user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: origin_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: type_solution_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: status_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: responsible
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: is_registred
+          in: query
+          required: false
+          schema:
+            type: boolean
+            example: false
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ubication_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: priority
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Alta
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    put:
+      tags:
+      - Tickets Management
+      summary: Actualiza la gestión de un ticket comercial
+      operationId: put_ticket_commercial
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  description: "ticket_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
+      responses:
+        "200":
+          description: Registro actualizado
+        "404":
+          description: Ticket o gestión no encontrada
+        "500":
+          description: Error interno
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Tickets Management
+      summary: Guarda la gestion del ticket del area comercial en la base de datos.
+      description: Guardado del ticket comercial
+      operationId: post_ticket_commercial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    ticket_id:
+                      type: integer
+                      nullable: true
+                      example: 1
+                    assigned_user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                    origin_id:
+                      nullable: true
+                      type: integer
+                      example: 1
+                    type_solution_id:
+                      nullable: true
+                      type: integer
+                      example: 1
+                    quoted_amount:
+                      nullable: true
+                      type: string
+                      example: 212.30
+                    probability_closing:
+                      nullable: true
+                      type: integer
+                      example: 50
+                    closing_date:
+                      nullable: true
+                      type: string
+                      format: date-time
+                      example: "2025-01-21T00:00:00"
+                    next_action:
+                      nullable: true
+                      type: string
+                      example: En proceso
+                    responsible_next_action:
+                      nullable: true
+                      type: string
+                      example: Comercial
+                    requires_technical:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    requires_material:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    scheduled_start_date:
+                      type: string
+                      nullable: true
+                      format: date-time
+                      example: "2025-01-21T00:00:00"
+                    contract_received:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    date_finish:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      example: "2025-02-21T00:00:00"
+                    reason_loss:
+                      nullable: true
+                      type: string
+                      example: "M/A"
+                    observations:
+                      type: string
+                      nullable: true
+                      example: Observaciones del ticket
+                    status_id:
+                      nullable: true
+                      type: integer
+                      example: 1
+                    user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /register-financial:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los tickets del area financiera
+      description: Devuelve todos los tickets financieros de la base
+      operationId: get_ticket_financial
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-21T00:00:00"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-22T00:00:00"
+        - name: ticket_financial_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ticket_glpi
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1234
+        - name: type_management
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Factura
+        - name: code_management
+          in: query
+          required: false
+          schema:
+            type: string
+            example: SOL-0555
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Cobrada
+        - name: user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ubication_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    put:
+      tags:
+      - Tickets Management
+      summary: Actualiza la gestión de un ticket financiero
+      operationId: put_ticket_financial
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  description: "ticket_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
+      responses:
+        "200":
+          description: Registro actualizado
+        "404":
+          description: Ticket o gestión no encontrada
+        "500":
+          description: Error interno
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Tickets Management
+      summary: Guarda la gestion del ticket del area financiera en la base de datos.
+      description: Guardado del ticket financiera
+      operationId: post_ticket_financial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    ticket_id:
+                      type: integer
+                      nullable: true
+                      example: 1
+                    type_management:
+                      nullable: true
+                      type: string
+                      example: Factura
+                    amount_pending:
+                      nullable: true
+                      type: number
+                      format: double
+                      example: 12.5
+                    amount_paid:
+                      nullable: true
+                      type: number
+                      format: double
+                      example: 12.5
+                    invoice_price:
+                      nullable: true
+                      type: number
+                      format: double
+                      example: 12.5
+                    number_document:
+                      nullable: true
+                      type: string
+                      example: "123456"
+                    date_document:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      example: "2025-02-21T00:00:00"
+                    observations:
+                      type: string
+                      nullable: true
+                      example: Observaciones del ticket
+                    status:
+                      nullable: true
+                      type: string
+                      example: Cobrada
+                    user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /approve-commercial-ticket:
+    post:
+      tags:
+      - Tickets Management
+      summary: Aprueba un ticket en estado aprobado para pasar al flujo financiero.
+      description: Aprueba el ticket comercial
+      operationId: approve_ticket_commercial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    id_commercial_ticket:
+                      type: integer
+                      example: 1
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /followup-commercial:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los seguimientos comerciales
+      description: Devuelve todos los seguimientos de la base
+      operationId: get_followup_commercial
+      parameters:
+        - name: id_commercial
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Tickets Management
+      summary: Crea un nuevo seguimiento comercial.
+      description: Guarda un seguimiento
+      operationId: new_followup_commercial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    commercial_management_id:
+                      type: integer
+                      example: 1
+                    observations:
+                      nullable: true
+                      type: string
+                      example: N/A
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /history-area-ticket/{id_ticket}:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene el historial de las areas por ticket
+      description: Devuelve el historial de area de la base
+      operationId: get_history_area
+      parameters:
+        - name: id_ticket
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 1
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
       responses:
         "200":
           description: OK

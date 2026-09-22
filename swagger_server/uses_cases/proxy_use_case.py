@@ -40,7 +40,15 @@ class ProxyUseCase:
         self.user_token_session = glpi_settings.get("USER_TOKEN_SESSION")
         self.timeout = glpi_settings.get("TIMEOUT", 30)
 
-    def proxy(self, method, endpoint, incoming_request, internal=None, external=None):
+    def proxy(
+        self,
+        method,
+        endpoint,
+        incoming_request,
+        internal=None,
+        external=None,
+        include_request_query=True,
+    ):
         method = method.upper()
         if method not in self.ALLOWED_METHODS:
             raise CustomAPIException("Metodo HTTP no soportado", 405)
@@ -58,6 +66,7 @@ class ProxyUseCase:
             session_token,
             internal,
             external,
+            include_request_query,
         )
 
         # El token puede haber expirado antes de su TTL en Redis. Se renueva y
@@ -72,6 +81,7 @@ class ProxyUseCase:
                 session_token,
                 internal,
                 external,
+                include_request_query,
             )
 
         return self._to_flask_response(response)
@@ -153,6 +163,7 @@ class ProxyUseCase:
         session_token,
         internal=None,
         external=None,
+        include_request_query=True,
     ):
         headers = {
             name: value
@@ -163,9 +174,10 @@ class ProxyUseCase:
         headers["Session-Token"] = session_token
 
         query_params = []
-        for name, values in incoming_request.args.lists():
-            if name != "endpoint":
-                query_params.extend((name, value) for value in values)
+        if include_request_query:
+            for name, values in incoming_request.args.lists():
+                if name != "endpoint":
+                    query_params.extend((name, value) for value in values)
 
         body = incoming_request.get_data(cache=True)
         try:

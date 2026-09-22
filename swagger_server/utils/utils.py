@@ -4,31 +4,15 @@ import re
 
 from sqlalchemy import or_
 
-from swagger_server.models.db.logbook_entry import LogbookEntry
-from swagger_server.models.db.logbook_out import LogbookOut
+from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 
 # Funciones de utilidad para el sistema completo.
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-SEARCH_COLUMNS_OUT = [
-    LogbookOut.name_user,
-    LogbookOut.name_driver,
-    LogbookOut.truck_license,
-    LogbookOut.shipping_guide,
-    LogbookOut.observations,
-    LogbookOut.authorized_by,
-    LogbookOut.destiny,
-]
-
-SEARCH_COLUMNS_ENTRY = [
-    LogbookEntry.name_user,
-    LogbookEntry.name_driver,
-    LogbookEntry.truck_license,
-    LogbookEntry.shipping_guide,
-    LogbookEntry.observations,
-    LogbookEntry.authorized_by,
-    LogbookEntry.destiny_intern,
+SEARCH_COLUMNS_TECHNICAL_TICKETS = [
+    TechnicalTicketManagement.code_management,
+    TechnicalTicketManagement.case_type
 ]
 
 PREFIX_RE = re.compile(

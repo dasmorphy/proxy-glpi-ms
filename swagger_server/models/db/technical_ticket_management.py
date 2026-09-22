@@ -24,22 +24,23 @@ class TechnicalTicketManagement(Base):
         nullable=False
     )
 
-    ticket_glpi = Column(Text)
+    ticket_id = Column(
+        Integer,
+        ForeignKey('internal_management.tickets_management.id_ticket', onupdate='NO ACTION', ondelete='NO ACTION'),
+    )
+
     code_management = Column(Text)
-    client_id = Column(Integer)
-    ubication_client_id = Column(Integer)
-    contact = Column(Text)
     case_type = Column(Text)
-    priority = Column(Text)
-    responsible = Column(Text)
     management_status = Column(Text)
     next_action = Column(Text)
+    observations = Column(Text)
     requires_material = Column(Boolean)
     requires_monitoring = Column(Boolean)
     status = Column(Text)
     created_by = Column(Text)
     updated_by = Column(Text)
-    
+    commitment_date = Column(DateTime)
+
     created_at = Column(
         DateTime,
         server_default=func.now()

@@ -13,6 +13,7 @@ from swagger_server.controllers.glpi_proxy_controller import GlpiProxyView
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.repository.proxy_repository import ProxyRepository
 from swagger_server.test import BaseTestCase
+from swagger_server.uses_cases.internal_management_use_case import InternalManagementUseCase
 from swagger_server.uses_cases.proxy_use_case import ProxyUseCase
 
 
@@ -102,7 +103,11 @@ class FakeRepository:
 
 class FakeControllerUseCase:
     def proxy(self, **kwargs):
-        response = Response(b'{"ok":true}', status=207, content_type="application/json")
+        response = Response(
+            b'[{"id":123,"name":"Ticket paginado"}]',
+            status=207,
+            content_type="application/json",
+        )
         response.headers["X-GLPI"] = "forwarded"
         response.headers["Content-Encoding"] = "gzip"
         response.headers["Content-Range"] = "0-9/25"
@@ -111,11 +116,36 @@ class FakeControllerUseCase:
         return response
 
 
+class FakeControllerInternalManagementUseCase:
+    def __init__(self):
+        self.calls = []
+
+    def add_management_area_to_tickets(self, tickets, internal, external):
+        self.calls.append((tickets, internal, external))
+        return [
+            dict(ticket, management_area="Tecnica", priority_intern="Alta")
+            for ticket in tickets
+        ]
+
+
+class FakeManagementRepository:
+    def __init__(self):
+        self.calls = []
+
+    def get_management_areas_by_ticket_ids(self, ticket_ids, internal, external):
+        self.calls.append((ticket_ids, internal, external))
+        return {
+            2: {"management_area": "Tecnica", "priority": "Alta"},
+            4: {"management_area": "Comercial", "priority": "Media"},
+        }
+
+
 class TestGlpiProxyController(BaseTestCase):
     def test_controller_and_after_request_preserve_glpi_headers(self):
         app = Flask(__name__)
         view = GlpiProxyView.__new__(GlpiProxyView)
         view.proxy_use_case = FakeControllerUseCase()
+        view.internal_management_use_case = FakeControllerInternalManagementUseCase()
 
         @app.before_request
         def set_test_context():
@@ -128,7 +158,10 @@ class TestGlpiProxyController(BaseTestCase):
         app.after_request(clear_context)
         app.add_url_rule(
             "/proxy",
-            view_func=lambda: view._proxy("GET", "Ticket"),
+            view_func=lambda: view._proxy(
+                "GET",
+                "Ticket?sort=date&order=DESC&expand_dropdowns=true&range=0-4",
+            ),
         )
 
         response = app.test_client().get("/proxy")
@@ -136,7 +169,14 @@ class TestGlpiProxyController(BaseTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(
             {
-                "data": {"ok": True},
+                "data": [
+                    {
+                        "id": 123,
+                        "management_area": "Tecnica",
+                        "name": "Ticket paginado",
+                        "priority_intern": "Alta",
+                    }
+                ],
                 "error_code": 0,
                 "external_transaction_id": None,
                 "internal_transaction_id": response.json["internal_transaction_id"],
@@ -153,6 +193,34 @@ class TestGlpiProxyController(BaseTestCase):
         self.assertEqual("application/json", response.content_type)
         self.assertNotIn("Content-Encoding", response.headers)
         self.assertEqual("internal-id", response.headers["X-Internal-Transaction-Id"])
+
+    def test_ticket_page_enrichment_uses_one_bulk_database_lookup(self):
+        repository = FakeManagementRepository()
+        use_case = InternalManagementUseCase(repository)
+        tickets = [
+            {"id": 4, "name": "Fourth"},
+            {"id": "2", "name": "Second"},
+            {"id": 4, "name": "Fourth duplicate"},
+            {"id": 99, "name": "Without local management"},
+            {"name": "Without id"},
+        ]
+
+        result = use_case.add_management_area_to_tickets(
+            tickets, "internal-id", "external-id"
+        )
+
+        self.assertEqual(
+            [([2, 4, 99], "internal-id", "external-id")], repository.calls
+        )
+        self.assertEqual(
+            ["Comercial", "Tecnica", "Comercial", None, None],
+            [ticket["management_area"] for ticket in result],
+        )
+        self.assertEqual(
+            ["Media", "Alta", "Media", None, None],
+            [ticket["priority_intern"] for ticket in result],
+        )
+        self.assertNotIn("management_area", tickets[0])
 
     def test_forwards_headers_query_body_and_forces_glpi_tokens(self):
         repository = FakeRepository("cached-session")
