@@ -24,22 +24,17 @@ class TechnicalTicketManagement(Base):
         nullable=False
     )
 
-    ticket_id = Column(
+    inspection_id = Column(
         Integer,
-        ForeignKey('internal_management.tickets_management.id_ticket', onupdate='NO ACTION', ondelete='NO ACTION'),
+        ForeignKey('internal_management.inspection_technical.id_inspection', onupdate='NO ACTION', ondelete='NO ACTION'),
+        unique=True,
     )
 
     code_management = Column(Text)
-    case_type = Column(Text)
-    management_status = Column(Text)
-    next_action = Column(Text)
-    observations = Column(Text)
-    requires_material = Column(Boolean)
-    requires_monitoring = Column(Boolean)
+    description = Column(Text)
     status = Column(Text)
     created_by = Column(Text)
     updated_by = Column(Text)
-    commitment_date = Column(DateTime)
 
     created_at = Column(
         DateTime,

@@ -10,10 +10,6 @@ from swagger_server.models.db.technical_ticket_management import TechnicalTicket
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-SEARCH_COLUMNS_TECHNICAL_TICKETS = [
-    TechnicalTicketManagement.code_management,
-    TechnicalTicketManagement.case_type
-]
 
 PREFIX_RE = re.compile(
     r'^(Ing\.?|Dr\.?|Dra\.?|Sr\.?|Sra\.?|Tnt\.?|Tte\.?|Cap\.?|Crnel\.?|Arq\.?|Eco\.?)\s+',

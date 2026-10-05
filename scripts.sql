@@ -1,7 +1,6 @@
 CREATE TABLE internal_management.technical_ticket_management
 (
     id_management_technical integer NOT NULL,
-    ticket_glpi text,
     code_management text,
     case_type text,
     management_status text,
@@ -48,31 +47,35 @@ ALTER TABLE IF EXISTS internal_management.technical_ticket_management
 
 -- DROP TABLE IF EXISTS internal_management.tickets_management;
 
-CREATE TABLE IF NOT EXISTS internal_management.tickets_management
+CREATE TABLE IF NOT EXISTS internal_management.inspection_technical
 (
-    id_ticket integer NOT NULL,
-    ticket_glpi integer,
+    id_inspection integer NOT NULL DEFAULT nextval('internal_management.tickets_management_id_seq'::regclass),
     management_area text COLLATE pg_catalog."default",
-    next_area text COLLATE pg_catalog."default",
-    title_ticket text COLLATE pg_catalog."default",
     status text COLLATE pg_catalog."default",
     created_at timestamp without time zone DEFAULT now(),
     created_by text COLLATE pg_catalog."default",
     updated_at timestamp without time zone DEFAULT now(),
     updated_by text COLLATE pg_catalog."default",
-    responsible_ticket text COLLATE pg_catalog."default",
     priority text COLLATE pg_catalog."default",
     client_id integer,
     ubication_id integer,
-    client_name text,
-    ubication_name text,
     contact text COLLATE pg_catalog."default",
-    CONSTRAINT tickets_management_pkey PRIMARY KEY (id_ticket)
+    code text COLLATE pg_catalog."default",
+    next_area text COLLATE pg_catalog."default",
+    title_ticket text COLLATE pg_catalog."default",
+    client_name text COLLATE pg_catalog."default",
+    ubication_name text COLLATE pg_catalog."default",
+    responsible_id uuid,
+    responsible_name text COLLATE pg_catalog."default",
+    case_type text COLLATE pg_catalog."default",
+    management_status text COLLATE pg_catalog."default",
+    commitment_date timestamp without time zone,
+    CONSTRAINT tickets_management_pkey PRIMARY KEY (id_inspection)
 )
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS internal_management.tickets_management
+ALTER TABLE IF EXISTS internal_management.inspection_technical
     OWNER to telearseg;
 
 
@@ -86,16 +89,13 @@ CREATE SEQUENCE internal_management.tickets_management_id_seq
     CACHE 1;
 
 ALTER SEQUENCE internal_management.tickets_management_id_seq
-    OWNED BY internal_management.tickets_management.id_ticket;
+    OWNED BY internal_management.inspection_technical.id_inspection;
 
 ALTER SEQUENCE internal_management.tickets_management_id_seq
     OWNER TO telearseg;
 
-ALTER TABLE IF EXISTS internal_management.tickets_management
+ALTER TABLE IF EXISTS internal_management.inspection_technical
     ALTER COLUMN id_ticket SET DEFAULT nextval('internal_management.tickets_management_id_seq'::regclass);
-
-CREATE INDEX IF NOT EXISTS idx_tickets_management_ticket_glpi
-    ON internal_management.tickets_management(ticket_glpi);
 
 
 
@@ -490,10 +490,56 @@ ALTER SEQUENCE internal_management.financial_ticket_management_id_seq
 ALTER TABLE IF EXISTS internal_management.financial_ticket_management
     ALTER COLUMN id_management_financial SET DEFAULT nextval('internal_management.financial_ticket_management_id_seq'::regclass);
 
+---------------------------------------------------------------------------------------------------------------------------------
 
 
+CREATE TABLE internal_management.material_tech_ticket
+(
+    id_material integer NOT NULL,
+    tech_ticket integer,
+    material_id integer,
+    other text,
+    material_description text,
+    quantity integer,
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (id_material),
+    CONSTRAINT tech_material_fkey FOREIGN KEY (tech_ticket)
+        REFERENCES internal_management.technical_ticket_management (id_management_technical) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_fkey FOREIGN KEY (material_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.material_tech_ticket
+    OWNER to telearseg;
 
 
+CREATE SEQUENCE internal_management.material_tech_ticket_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.material_tech_ticket_id_seq
+    OWNED BY internal_management.material_tech_ticket.id_material;
+
+ALTER SEQUENCE internal_management.material_tech_ticket_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.material_tech_ticket
+    ALTER COLUMN id_material SET DEFAULT nextval('internal_management.material_tech_ticket_id_seq'::regclass);
+
+-------------------------------------------------------------------------------------------------------------------------------------
+
+-- Solo un registro técnico por inspección
+ALTER TABLE IF EXISTS internal_management.technical_ticket_management
+    ADD CONSTRAINT technical_ticket_inspection_unique UNIQUE (inspection_id);
 
 
 

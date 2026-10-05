@@ -53,13 +53,13 @@ class GlpiProxyView(MethodView):
             response_headers = self._copy_upstream_headers(upstream_response)
             response["error_code"] = 0
             response_data = upstream_response.get_json()
-            if method.upper() == "GET" and self._is_ticket_collection_endpoint(endpoint):
-                response_data = self.internal_management_use_case.add_management_area_to_tickets(
-                    response_data,
-                    internal_transaction_id,
-                    external_transaction_id,
-                )
-            response["data"] = response_data
+            # if method.upper() == "GET" and self._is_ticket_collection_endpoint(endpoint):
+                # response_data = self.internal_management_use_case.add_management_area_to_tickets(
+                #     response_data,
+                #     internal_transaction_id,
+                #     external_transaction_id,
+                # )
+            response["data"] = []
             response["message"] = "Datos obtenidos correctamente"
             end_time = default_timer()
             logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
@@ -526,6 +526,38 @@ class GlpiProxyView(MethodView):
             )
 
 
+    def approve_technical_inspection(self, body=None):
+        internal_process = (None, None)
+        function_name = "approve_technical_inspection"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.is_json:
+                body = connexion.request.get_json()  # noqa: E501
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = body.get("externalTransactionId")
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {body.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                self.internal_management_use_case.approve_technical_inspection(
+                    body.get('data'),
+                    internal_transaction_id,
+                    external_transaction_id,
+                )
+                response["error_code"] = 0
+                response["message"] = "Inspección aprobada correctamente"
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                    internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
     def approve_ticket_commercial(self, body=None):
         internal_process = (None, None)
         function_name = "approve_ticket_commercial"
@@ -596,6 +628,35 @@ class GlpiProxyView(MethodView):
             response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
             
         return response, status_code
+
+    def get_inspection_technical(self):
+        internal_process = (None, None)
+        function_name = "get_inspection_technical"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.headers:
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = request.headers.get('externalTransactionId')
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {request.headers.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                headers = {k.lower(): v for k, v in request.headers.items()}
+                results = self.internal_management_use_case.get_inspection_technical(headers, request.args, internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["message"] = "Datos obtenidos correctamente"
+                response["data"] = results
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                            internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
     
 
     def new_followup_commercial(self, body=None):
@@ -641,7 +702,7 @@ class GlpiProxyView(MethodView):
         return response, status_code
 
 
-    def get_history_area(self, id_ticket):
+    def get_history_area(self, id_inspection):
         internal_process = (None, None)
         function_name = "get_history_area"
         response = {}
@@ -656,7 +717,7 @@ class GlpiProxyView(MethodView):
                 response["external_transaction_id"] = external_transaction_id
                 message = f"start request: {function_name}, channel: {request.headers.get('channel')}"
                 logger.info(message, internal=internal_transaction_id, external=external_transaction_id)                
-                results = self.internal_management_use_case.get_history_area(id_ticket, internal_transaction_id, external_transaction_id)
+                results = self.internal_management_use_case.get_history_area(id_inspection, internal_transaction_id, external_transaction_id)
                 response["error_code"] = 0
                 response["data"] = results
                 response["message"] = "Datos obtenidos correctamente"
@@ -668,7 +729,163 @@ class GlpiProxyView(MethodView):
             response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
             
         return response, status_code
-    
+
+
+    def get_inspection_materials(self):
+        internal_process = (None, None)
+        function_name = "get_inspection_materials"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.headers:
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = request.headers.get('externalTransactionId')
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {request.headers.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                results = self.internal_management_use_case.get_inspection_materials(request.args, internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["data"] = results
+                response["message"] = "Datos obtenidos correctamente"
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                            internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
+
+    def post_inspection_technical(self, body=None):
+        """Guarda la inspeccion tecnica en la base de datos.
+
+        Guardado de inspeccion # noqa: E501
+
+        :param body: 
+        :type body: dict | bytes
+
+        :rtype: ResponseGeneric
+        """
+        internal_process = (None, None)
+        function_name = "post_inspection_technical"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.is_json:
+                body = connexion.request.get_json()  # noqa: E501
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = body.get("externalTransactionId")
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {body.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                self.internal_management_use_case.post_inspection_technical(body.get('data'), internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["message"] = "Registro creado correctamente"
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                    internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
+    def get_dashboard(self):
+        internal_process = (None, None)
+        function_name = "get_dashboard"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.headers:
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = request.headers.get('externalTransactionId')
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {request.headers.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                results = self.internal_management_use_case.get_dashboard(request.args, internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["message"] = "Datos obtenidos correctamente"
+                response["data"] = results
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                            internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
+    def get_project_activities(self):
+        internal_process = (None, None)
+        function_name = "get_project_activities"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.headers:
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = request.headers.get('externalTransactionId')
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {request.headers.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                results = self.internal_management_use_case.get_project_activities(internal_transaction_id, external_transaction_id)
+                response["error_code"] = 0
+                response["message"] = "Datos obtenidos correctamente"
+                response["data"] = results
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                            internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
+    def put_inspection_technical(self, id_inspection, body=None):
+        internal_process = (None, None)
+        function_name = "put_inspection_technical"
+        response = {}
+        status_code = 500
+        try:
+            if connexion.request.is_json:
+                body = connexion.request.get_json()  # noqa: E501
+                start_time = default_timer()
+                internal_transaction_id = str(generate_internal_transaction_id())
+                external_transaction_id = body.get("externalTransactionId")
+                internal_process = (internal_transaction_id, external_transaction_id)
+                response["internal_transaction_id"] = internal_transaction_id
+                response["external_transaction_id"] = external_transaction_id
+                message = f"start request: {function_name}, channel: {body.get('channel')}"
+                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
+                self.internal_management_use_case.update_inspection_technical(
+                    id_inspection,
+                    body.get('data'),
+                    internal_transaction_id,
+                    external_transaction_id,
+                )
+                response["error_code"] = 0
+                response["message"] = "Registro actualizado correctamente"
+                end_time = default_timer()
+                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
+                    internal=internal_transaction_id, external=external_transaction_id)
+                status_code = 200
+        except Exception as ex:
+            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
+
+        return response, status_code
+
 
     @staticmethod
     def _validate_document_download_endpoint(endpoint):

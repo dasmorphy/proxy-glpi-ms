@@ -364,37 +364,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
-  /register-technical:
+  /inspection:
     get:
       tags:
-      - Tickets Management
+      - Inspection
       summary: Obtiene los tickets del área técnica
       description: Devuelve los tickets técnicos registrados en la base
-      operationId: get_ticket_technical
+      operationId: get_inspection_technical
       parameters:
-        - name: search
+        - name: id_inspection
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: responsible_id
           in: query
           required: false
           schema:
             type: string
-            example: dmales
-        - name: page
+            format: uuid
+            example: fcea920f7412b5da7be0cf42b8c93759
+        - name: pending_technical
           in: query
           required: false
           schema:
-            type: integer
-            minimum: 1
-            default: 1
-            example: 1
-        - name: page_size
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-            example: 20
+            type: boolean
+            example: true
         - name: start_date
           in: query
           required: false
@@ -409,6 +405,328 @@ paths:
             type: string
             format: date-time
             example: "2025-01-22T00:00:00"
+        - name: pending_commercial
+          in: query
+          required: false
+          schema:
+            type: boolean
+            example: true
+        - name: ready_for_project
+          in: query
+          required: false
+          description: Inspecciones con registro comercial aprobado y sin proyecto creado.
+          schema:
+            type: boolean
+            example: true
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: En proceso
+        - name: management_status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Pendiente
+        - name: case_type
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Incidente
+        - name: responsible
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: ubication_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: priority
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Alta
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "ZENTINEL"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Inspection
+      summary: Guarda la inspeccion tecnica en la base de datos.
+      description: Guardado de inspeccion
+      operationId: post_inspection_technical
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    inspection_id:
+                      type: integer
+                      example: 1
+                    client_id:
+                      type: integer
+                      example: 1
+                    ubication_id:
+                      type: integer
+                      example: 1
+                    client_name:
+                      type: string
+                      example: TELEARGEG
+                    ubication_name:
+                      type: string
+                      example: GUAYAS
+                    contact:
+                      type: string
+                      example: Daniel
+                    case_type:
+                      type: string
+                      example: Cotización
+                    priority:
+                      type: string
+                      example: Alta
+                    responsible_id:
+                      type: string
+                      format: uuid
+                      example: fcea920f7412b5da7be0cf42b8c93759
+                    responsible_name:
+                      type: string
+                      example: Daniel
+                    management_status:
+                      type: string
+                      example: En proceso
+                    title_ticket:
+                      type: string
+                      example: Propuesta zentinel
+                    next_action:
+                      type: string
+                      example: Cotización
+                    commitment_date:
+                      type: string
+                      format: date-time
+                      example: 2024-06-01T12:00:00Z
+                    requires_material:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    requires_monitoring:
+                      type: boolean
+                      nullable: true
+                      example: true
+                    observations:
+                      type: string
+                      nullable: true
+                      example: Observaciones del ticket
+                    status:
+                      type: string
+                      example: Listo para cotizar
+                    survey_status:
+                      type: string
+                      example: En proceso
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /inspection/{id_inspection}:
+    put:
+      tags:
+      - Inspection
+      summary: Actualiza la inspeccion tecnica en la base de datos.
+      description: "Actualiza solo los campos enviados en data; ninguno es obligatorio."
+      operationId: put_inspection_technical
+      parameters:
+        - name: id_inspection
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  properties:
+                    client_id:
+                      type: integer
+                      example: 1
+                    ubication_id:
+                      type: integer
+                      example: 1
+                    client_name:
+                      type: string
+                      example: TELEARGEG
+                    ubication_name:
+                      type: string
+                      example: GUAYAS
+                    contact:
+                      type: string
+                      example: Daniel
+                    priority:
+                      type: string
+                      example: Alta
+                    responsible_id:
+                      type: string
+                      format: uuid
+                      example: fcea920f7412b5da7be0cf42b8c93759
+                    responsible_name:
+                      type: string
+                      example: Daniel
+                    title_ticket:
+                      type: string
+                      example: Propuesta zentinel
+                    status:
+                      type: string
+                      example: Listo para cotizar
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /register-technical:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los tickets del área técnica
+      description: Devuelve los tickets técnicos registrados en la base
+      operationId: get_ticket_technical
+      parameters:
         - name: ticket_technical_id
           in: query
           required: false
@@ -421,7 +739,7 @@ paths:
           schema:
             type: boolean
             example: true
-        - name: ticket_glpi
+        - name: inspection_id
           in: query
           required: false
           schema:
@@ -439,6 +757,12 @@ paths:
           schema:
             type: string
             example: Pendiente
+        - name: user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
         - name: case_type
           in: query
           required: false
@@ -529,7 +853,7 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "ticket_glpi identifica el ticket; los demás campos del POST son opcionales."
+                  description: "inspection_id identifica el ticket; los demás campos del POST son opcionales."
                 channel:
                   type: string
                 externalTransactionId:
@@ -556,64 +880,32 @@ paths:
                 data:
                   type: object
                   properties:
-                    ticket_glpi:
+                    inspection_id:
                       type: integer
                       example: 1
-                    client_id:
-                      type: integer
-                      example: 1
-                    ubication_id:
-                      type: integer
-                      example: 1
-                    client_name:
+                    description:
                       type: string
-                      example: TELEARGEG
-                    ubication_name:
-                      type: string
-                      example: GUAYAS
-                    contact:
-                      type: string
-                      example: Daniel
-                    case_type:
-                      type: string
-                      example: Cotización
-                    priority:
-                      type: string
-                      example: Alta
-                    responsible:
-                      type: string
-                      example: Daniel
-                    management_status:
-                      type: string
-                      example: En proceso
-                    title_ticket:
-                      type: string
-                      example: Propuesta zentinel
-                    next_action:
-                      type: string
-                      example: Cotización
-                    commitment_date:
-                      type: string
-                      format: date-time
-                      example: 2024-06-01T12:00:00Z
-                    requires_material:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    requires_monitoring:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    observations:
-                      type: string
-                      nullable: true
-                      example: Observaciones del ticket
-                    status:
-                      type: string
-                      example: Listo para cotizar
-                    survey_status:
-                      type: string
-                      example: En proceso
+                      example: "N/A"
+                    materials:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          material_id:
+                            nullable: true
+                            type: integer
+                            example: 1
+                          quantity:
+                            type: integer
+                            example: 1
+                          other:
+                            nullable: true
+                            type: string
+                            example: "N/A"
+                          material_description:
+                            nullable: true
+                            type: string
+                            example: "N/A"
                     user:
                       type: string
                       example: dmales
@@ -683,7 +975,7 @@ paths:
           schema:
             type: integer
             example: 1
-        - name: ticket_glpi
+        - name: inspection_id
           in: query
           required: false
           schema:
@@ -809,7 +1101,7 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "ticket_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                  description: "inspection_id identifica el ticket GLPI; los demás campos del POST son opcionales."
                 channel:
                   type: string
                 externalTransactionId:
@@ -836,7 +1128,7 @@ paths:
                 data:
                   type: object
                   properties:
-                    ticket_id:
+                    inspection_id:
                       type: integer
                       nullable: true
                       example: 1
@@ -854,7 +1146,6 @@ paths:
                       example: 1
                     quoted_amount:
                       nullable: true
-                      type: string
                       example: 212.30
                     probability_closing:
                       nullable: true
@@ -977,7 +1268,7 @@ paths:
           schema:
             type: integer
             example: 1
-        - name: ticket_glpi
+        - name: inspection_id
           in: query
           required: false
           schema:
@@ -1079,7 +1370,7 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "ticket_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                  description: "inspection_id identifica el ticket GLPI; los demás campos del POST son opcionales."
                 channel:
                   type: string
                 externalTransactionId:
@@ -1106,7 +1397,7 @@ paths:
                 data:
                   type: object
                   properties:
-                    ticket_id:
+                    inspection_id:
                       type: integer
                       nullable: true
                       example: 1
@@ -1204,6 +1495,72 @@ paths:
                   type: object
                   properties:
                     id_commercial_ticket:
+                      type: integer
+                      example: 1
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /approve-technical-inspection:
+    post:
+      tags:
+      - Inspection
+      summary: Aprueba la inspeccion tecnica.
+      description: Actualiza el estado de la inspeccion a 'Listo para cotizar'
+      operationId: approve_technical_inspection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  required:
+                  - id_inspection
+                  - user
+                  properties:
+                    id_inspection:
                       type: integer
                       example: 1
                     user:
@@ -1373,7 +1730,65 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
-  /history-area-ticket/{id_ticket}:
+  /inspection-materials:
+    get:
+      tags:
+      - Tickets Management
+      summary: Obtiene los materiales del registro técnico de una inspección
+      description: Devuelve los materiales de material_tech_ticket de la inspección junto con la data del equipo (TechnicalEquipment) cuando tienen material_id
+      operationId: get_inspection_materials
+      parameters:
+        - name: inspection_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            example: 1
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /history-area-ticket/{id_inspection}:
     get:
       tags:
       - Tickets Management
@@ -1381,7 +1796,7 @@ paths:
       description: Devuelve el historial de area de la base
       operationId: get_history_area
       parameters:
-        - name: id_ticket
+        - name: id_inspection
           in: path
           required: true
           schema:
@@ -1418,6 +1833,110 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /dashboard:
+    get:
+      tags:
+      - Dashboard
+      summary: Obtiene los indicadores del dashboard
+      description: >-
+        Devuelve pendientes por área, porcentaje de finalizados por área,
+        cotizaciones aprobadas vs rechazadas, facturas emitidas vs cobradas,
+        SLA promedio por área y tiempos en área por inspección. Las fechas
+        filtran por la fecha de creación de la inspección.
+      operationId: get_dashboard
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2026-09-01T00:00:00"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2026-09-30T23:59:59"
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /dashboard/project-activities:
+    get:
+      tags:
+      - Dashboard
+      summary: Obtiene la cantidad de actividades registradas por proyecto
+      description: Devuelve el code de cada TaskTechnical y el total de TechnicalRecord asociados
+      operationId: get_project_activities
+      parameters:
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
         "500":
           description: Internal server error
           content:

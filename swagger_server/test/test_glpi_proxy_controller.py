@@ -132,13 +132,6 @@ class FakeManagementRepository:
     def __init__(self):
         self.calls = []
 
-    def get_management_areas_by_ticket_ids(self, ticket_ids, internal, external):
-        self.calls.append((ticket_ids, internal, external))
-        return {
-            2: {"management_area": "Tecnica", "priority": "Alta"},
-            4: {"management_area": "Comercial", "priority": "Media"},
-        }
-
 
 class TestGlpiProxyController(BaseTestCase):
     def test_controller_and_after_request_preserve_glpi_headers(self):

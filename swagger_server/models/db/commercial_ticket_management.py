@@ -19,7 +19,7 @@ class CommercialTicketManagement(Base):
     ticket_id = Column(
         Integer,
         ForeignKey(
-            "internal_management.tickets_management.id_ticket",
+            "internal_management.inspection_technical.id_inspection",
             onupdate="NO ACTION",
             ondelete="NO ACTION",
         ),

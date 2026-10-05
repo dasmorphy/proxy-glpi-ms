@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from loguru import logger
-from sqlalchemy import and_, exists, func, select
+from sqlalchemy import and_, delete, exists, func, select
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.client_projects import Client
@@ -13,10 +13,13 @@ from swagger_server.models.db.commercial_type_solution import CommercialTypeSolu
 from swagger_server.models.db.financial_ticket_management import FinancialTicketManagement
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
 from swagger_server.models.db.location import ClientLocation
+from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
+from swagger_server.models.db.task_technical import TaskTechnical
+from swagger_server.models.db.technical_equipment import TechnicalEquipment
+from swagger_server.models.db.technical_record import TechnicalRecord
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
-from swagger_server.models.db.tickets_management import TicketsManagement
+from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.resources.databases.postgresql import PostgreSQLClient
-from swagger_server.utils.utils import SEARCH_COLUMNS_TECHNICAL_TICKETS, apply_search
 
 
 class InternalManagementRepository:
@@ -36,64 +39,29 @@ class InternalManagementRepository:
     def generate_code_financial(management_id):
         return f"MOV-{datetime.now().year}-{management_id:04d}"
 
-    def get_management_areas_by_ticket_ids(self, ticket_ids, internal, external):
-        """Obtiene area y prioridad de una pagina de tickets en una consulta."""
-        unique_ticket_ids = sorted(set(ticket_ids))
-        if not unique_ticket_ids:
-            return {}
+    @staticmethod
+    def generate_code_inspection(management_id):
+        return f"INS-{datetime.now().year}-{management_id:04d}"
 
-        with self.db_telearseg.session_factory() as session:
-            try:
-                rows = session.execute(
-                    select(
-                        TicketsManagement.ticket_glpi,
-                        TicketsManagement.management_area,
-                        TicketsManagement.priority,
-                    )
-                    .where(TicketsManagement.ticket_glpi.in_(unique_ticket_ids))
-                    .order_by(TicketsManagement.id_ticket.desc())
-                ).all()
 
-                management_data = {}
-                for ticket_glpi, management_area, priority in rows:
-                    # Si existen registros historicos duplicados, se conserva
-                    # el mas reciente gracias al orden descendente por id.
-                    management_data.setdefault(
-                        ticket_glpi,
-                        {
-                            "management_area": management_area,
-                            "priority": priority,
-                        },
-                    )
-                return management_data
-            except Exception as exception:
-                logger.error(
-                    'Error: {}',
-                    str(exception),
-                    internal=internal,
-                    external=external,
-                )
-                if isinstance(exception, CustomAPIException):
-                    raise exception
-                raise CustomAPIException(
-                    "Error al consultar las areas de gestion de los tickets",
-                    500,
-                )
-
-    def post_ticket_technical(self, body, internal, external):
+    def post_inspection_technical(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
                 current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
                 next_area = "Proyectos" if current_area == "Comercial" else "Comercial"
 
-                new_ticket = TicketsManagement(
-                    ticket_glpi=body.get('ticket_glpi'),
+                new_inspection = InspectionTechnical(
                     management_area=current_area,
                     next_area=next_area,
                     title_ticket=body.get('title_ticket'),
                     contact=body.get('contact'),
                     priority=body.get('priority'),
-                    responsible_ticket=body.get('responsible'),
+                    responsible_id=body.get('responsible_id'),
+                    responsible_name=body.get('responsible_name'),
+                    commitment_date=body.get('commitment_date'),
+                    management_status=body.get('management_status'),
+                    status=body.get('status'),
+                    case_type=body.get('case_type'),
                     client_id=body.get('client_id'),
                     ubication_id=body.get('ubication_id'),
                     created_by=body.get('user'),
@@ -102,28 +70,120 @@ class InternalManagementRepository:
                     ubication_name=body.get('ubication_name'),
                 )
 
-                session.add(new_ticket)
+
+                session.add(new_inspection)
                 session.flush()
 
+                new_inspection.code = self.generate_code_inspection(
+                    new_inspection.id_inspection
+                )
+
                 new_history_area = HistoryAreaTicket(
-                    ticket_id=new_ticket.id_ticket,
+                    ticket_id=new_inspection.id_inspection,
                     previous_area="Técnica",
                     current_area=current_area,
                     created_by=body.get('user')
                 )
 
+
                 session.add(new_history_area)
+                session.commit()
+
+            except Exception as exception:
+                session.rollback()
+                logger.error('Error: {}', str(exception), internal=internal, external=external)
+                if isinstance(exception, CustomAPIException):
+                    raise exception
+
+                raise CustomAPIException("Error al insertar en la base de datos", 500)
+
+            finally:
+                session.close()
+
+    def update_inspection_technical(self, id_inspection, body, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                if body is not None and not isinstance(body, dict):
+                    raise CustomAPIException("El campo data debe ser un objeto", 400)
+                body = body or {}
+
+                inspection = self._get_inspection(session, id_inspection)
+
+                self._apply_fields(
+                    inspection,
+                    body,
+                    {
+                        "title_ticket": "title_ticket",
+                        "status": "status",
+                        "contact": "contact",
+                        "priority": "priority",
+                        "responsible_id": "responsible_id",
+                        "responsible_name": "responsible_name",
+                        "client_id": "client_id",
+                        "ubication_id": "ubication_id",
+                        "client_name": "client_name",
+                        "ubication_name": "ubication_name",
+                    },
+                )
+                self._set_updated_by(body, inspection)
+
+                if (
+                    body.get("status") == "Listo para cotizar"
+                    and inspection.management_area == "Técnica"
+                ):
+                    inspection.management_area = "Comercial"
+                    inspection.next_area = "Proyectos"
+
+                    new_history_area = HistoryAreaTicket(
+                        ticket_id=inspection.id_inspection,
+                        previous_area="Técnica",
+                        current_area="Comercial",
+                        created_by=body.get('user')
+                    )
+                    session.add(new_history_area)
+
+                session.commit()
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al actualizar la inspección",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
+    def post_ticket_technical(self, body, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                inspection = session.execute(
+                    select(InspectionTechnical).where(
+                        InspectionTechnical.id_inspection == body.get('inspection_id')
+                    )
+                ).scalar_one_or_none()
+
+                if inspection is None:
+                    raise CustomAPIException("Inspección no encontrado", 404)
+
+                already_registered = session.execute(
+                    select(
+                        exists().where(
+                            TechnicalTicketManagement.inspection_id
+                            == inspection.id_inspection
+                        )
+                    )
+                ).scalar()
+
+                if already_registered:
+                    raise CustomAPIException(
+                        "La inspección ya tiene un registro técnico asociado", 409
+                    )
 
                 new_register = TechnicalTicketManagement(
-                    ticket_id=new_ticket.id_ticket,
-                    case_type=body.get('case_type'),
-                    management_status=body.get('management_status'),
-                    next_action=body.get('next_action'),
-                    commitment_date=body.get('commitment_date'),
-                    requires_material=body.get('requires_material'),
-                    requires_monitoring=body.get('requires_monitoring'),
-                    observations=body.get('observations'),
-                    status=body.get('status'),
+                    inspection_id=inspection.id_inspection,
+                    description=body.get('description'),
+                    status="Pendiente aprobación",
                     created_by=body.get('user'),
                     updated_by=body.get('user'),
                 )
@@ -133,6 +193,17 @@ class InternalManagementRepository:
                 new_register.code_management = self.generate_code_technical(
                     new_register.id_management_technical
                 )
+
+                for material in body.get('materials', []):
+                    new_material = MaterialTechTicket(
+                        tech_ticket=new_register.id_management_technical,
+                        material_id=material.get('material_id'),
+                        material_description=material.get('material_description'),
+                        other=material.get('other'),
+                        quantity=material.get('quantity'),
+                    )
+                    session.add(new_material)
+
                 session.commit()
 
             except Exception as exception:
@@ -147,18 +218,18 @@ class InternalManagementRepository:
                 session.close()
 
 
-    def get_ticket_technical(self, filters, pagination, internal, external):
+    def get_ticket_technical(self, filters, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
                 stmt = (
                     select(
                         TechnicalTicketManagement,
-                        TicketsManagement,
+                        InspectionTechnical,
                     )
                     .join(
-                        TicketsManagement,
-                        TicketsManagement.id_ticket
-                        == TechnicalTicketManagement.ticket_id,
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection
+                        == TechnicalTicketManagement.inspection_id,
                     )
                 )
 
@@ -168,12 +239,13 @@ class InternalManagementRepository:
                 )
                 if filters.get("management_status"):
                     conditions.append(
-                        TechnicalTicketManagement.management_status
+                        InspectionTechnical.management_status
                         == filters["management_status"]
                     )
-                if filters.get("case_type"):
+
+                if filters.get("user"):
                     conditions.append(
-                        TechnicalTicketManagement.case_type == filters["case_type"]
+                        TechnicalTicketManagement.created_by == filters["user"]
                     )
 
                 if filters.get("ticket_technical_id") is not None:
@@ -181,59 +253,52 @@ class InternalManagementRepository:
 
                 if filters.get("pending_commercial") == 'true':
                     conditions.append(
-                        TechnicalTicketManagement.status == "Listo para cotizar"
+                        InspectionTechnical.status == "Listo para cotizar"
                     )
 
                     conditions.append(
                         ~exists().where(
                             CommercialTicketManagement.ticket_id
-                            == TechnicalTicketManagement.ticket_id
+                            == InspectionTechnical.id_inspection
                         )
                     )
 
-                apply_search(
-                    conditions,
-                    filters.get("search"),
-                    [
-                        *SEARCH_COLUMNS_TECHNICAL_TICKETS,
-                        TicketsManagement.title_ticket,
-                        TicketsManagement.contact,
-                        TicketsManagement.priority,
-                        TicketsManagement.responsible_ticket,
-                    ],
-                )
 
                 if conditions:
                     stmt = stmt.where(and_(*conditions))
 
-                total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
-                total = session.execute(total_stmt).scalar() or 0
 
                 paginated_stmt = (
                     stmt.order_by(
                         TechnicalTicketManagement.created_at.desc(),
                         TechnicalTicketManagement.id_management_technical.desc(),
                     )
-                    .offset(pagination.offset)
-                    .limit(pagination.page_size)
                 )
                 rows = session.execute(paginated_stmt).all()
 
-                # client_names, location_names = self._get_client_and_location_names(
-                #     [ticket.client_id for _, ticket in rows if ticket.client_id],
-                #     [ticket.ubication_id for _, ticket in rows if ticket.ubication_id],
-                #     internal,
-                #     external,
-                # )
-                rows_with_names = [
+                materials_by_ticket = {}
+                management_ids = [
+                    management.id_management_technical for management, _ in rows
+                ]
+                if management_ids:
+                    materials = session.execute(
+                        select(MaterialTechTicket)
+                        .where(MaterialTechTicket.tech_ticket.in_(management_ids))
+                        .order_by(MaterialTechTicket.id_material)
+                    ).scalars().all()
+                    for material in materials:
+                        materials_by_ticket.setdefault(
+                            material.tech_ticket, []
+                        ).append(material)
+
+                return [
                     (
                         management,
                         ticket,
+                        materials_by_ticket.get(management.id_management_technical, []),
                     )
                     for management, ticket in rows
                 ]
-
-                return rows_with_names, total
             except Exception as exception:
                 self._raise_database_error(
                     exception,
@@ -247,8 +312,8 @@ class InternalManagementRepository:
         with self.db_telearseg.session_factory() as session:
             try:
                 ticket = session.execute(
-                    select(TicketsManagement).where(
-                        TicketsManagement.ticket_glpi == body.get('ticket_id')
+                    select(InspectionTechnical).where(
+                        InspectionTechnical.id_inspection == body.get('inspection_id')
                     )
                 ).scalar_one_or_none()
 
@@ -261,7 +326,7 @@ class InternalManagementRepository:
                     ticket.next_area = 'Financiera'
 
                     new_history_area = HistoryAreaTicket(
-                        ticket_id=ticket.id_ticket,
+                        ticket_id=ticket.id_inspection,
                         previous_area="Comercial",
                         current_area="Proyectos",
                         created_by=body.get('user')
@@ -273,7 +338,7 @@ class InternalManagementRepository:
                     ticket.next_area = 'Proyectos'
 
                 new_register = CommercialTicketManagement(
-                    ticket_id=ticket.id_ticket,
+                    ticket_id=ticket.id_inspection,
                     assigned_user=body.get('assigned_user'),
                     origin_id=body.get('origin_id'),
                     type_solution_id=body.get('type_solution_id'),
@@ -327,15 +392,15 @@ class InternalManagementRepository:
                 stmt = (
                     select(
                         CommercialTicketManagement,
-                        TicketsManagement,
+                        InspectionTechnical,
                         CommercialOrigin.name.label("origin_name"),
                         CommercialTypeSolution.name.label("type_solution_name"),
                         CommercialTicketStatus.name.label("status_name"),
                         last_followup.c.last_followup_at,
                     )
                     .join(
-                        TicketsManagement,
-                        TicketsManagement.id_ticket
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection
                         == CommercialTicketManagement.ticket_id,
                     )
                     .outerjoin(
@@ -364,6 +429,17 @@ class InternalManagementRepository:
                     filters,
                     CommercialTicketManagement,
                 )
+
+                if filters.get("is_registred") == "true":
+                    conditions.append(
+                        exists().where(
+                            and_(
+                                TaskTechnical.inspection_id
+                                == CommercialTicketManagement.ticket_id,
+                                TaskTechnical.status == "Finalizado"
+                            )
+                        )
+                    )
 
                 if filters.get("pending_financial") == "true":
                     conditions.append(
@@ -404,17 +480,45 @@ class InternalManagementRepository:
                 )
 
 
-    def get_history_area(self, ticket_glpi, internal, external):
+    def get_inspection_materials(self, inspection_id, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                stmt = (
+                    select(MaterialTechTicket, TechnicalEquipment)
+                    .join(
+                        TechnicalTicketManagement,
+                        TechnicalTicketManagement.id_management_technical
+                        == MaterialTechTicket.tech_ticket,
+                    )
+                    .outerjoin(
+                        TechnicalEquipment,
+                        TechnicalEquipment.id_equipment
+                        == MaterialTechTicket.material_id,
+                    )
+                    .where(TechnicalTicketManagement.inspection_id == inspection_id)
+                    .order_by(MaterialTechTicket.id_material)
+                )
+
+                return session.execute(stmt).all()
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los materiales de la inspección",
+                    internal,
+                    external,
+                )
+
+    def get_history_area(self, inspection_id, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
                 stmt = (
                     select(HistoryAreaTicket)
                     .join(
-                        TicketsManagement,
-                        TicketsManagement.id_ticket
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection
                         == HistoryAreaTicket.ticket_id,
                     )
-                    .where(TicketsManagement.ticket_glpi == ticket_glpi)
+                    .where(InspectionTechnical.id_inspection == inspection_id)
                     .order_by(HistoryAreaTicket.created_at.desc())
                 )
 
@@ -436,32 +540,32 @@ class InternalManagementRepository:
             conditions.append(management_model.created_at <= filters["end_date"])
         if (filters.get("is_registred") == 'true'):
             conditions.append(management_model.status_id == 5)
-            conditions.append(TicketsManagement.management_area == "Proyectos")
+            conditions.append(InspectionTechnical.management_area == "Proyectos")
         if filters.get("pending_financial") == "true":
             conditions.append(
-                TicketsManagement.management_area
+                InspectionTechnical.management_area
                 == "Financiera"
             )
             conditions.append(
-                TicketsManagement.next_area
+                InspectionTechnical.next_area
                 == "Financiera"
             )
-        if filters.get("ticket_glpi") is not None:
-            conditions.append(TicketsManagement.ticket_glpi == filters["ticket_glpi"])
+        if filters.get("inspection_id") is not None:
+            conditions.append(InspectionTechnical.id_inspection == filters["inspection_id"])
         if filters.get("status"):
             conditions.append(management_model.status == filters["status"])
-        if filters.get("responsible"):
+        if filters.get("responsible_id"):
             conditions.append(
-                TicketsManagement.responsible_ticket == filters["responsible"]
+                InspectionTechnical.responsible_name == filters["responsible_id"]
             )
         if filters.get("client_id") is not None:
-            conditions.append(TicketsManagement.client_id == filters["client_id"])
+            conditions.append(InspectionTechnical.client_id == filters["client_id"])
         if filters.get("ubication_id") is not None:
             conditions.append(
-                TicketsManagement.ubication_id == filters["ubication_id"]
+                InspectionTechnical.ubication_id == filters["ubication_id"]
             )
         if filters.get("priority"):
-            conditions.append(TicketsManagement.priority == filters["priority"])
+            conditions.append(InspectionTechnical.priority == filters["priority"])
         return conditions
 
     def _get_client_and_location_names(self, client_ids, location_ids, internal, external):
@@ -596,8 +700,8 @@ class InternalManagementRepository:
         with self.db_telearseg.session_factory() as session:
             try:
                 ticket = session.execute(
-                    select(TicketsManagement).where(
-                        TicketsManagement.ticket_glpi == body.get("ticket_id")
+                    select(InspectionTechnical).where(
+                        InspectionTechnical.id_inspection == body.get("inspection_id")
                     )
                 ).scalar_one_or_none()
                 if ticket is None:
@@ -609,7 +713,7 @@ class InternalManagementRepository:
                     ticket.status = "Finalizado"
 
                 financial_management = FinancialTicketManagement(
-                    ticket_id=ticket.id_ticket,
+                    ticket_id=ticket.id_inspection,
                     type_management=body.get("type_management"),
                     amount_pending=body.get("amount_pending"),
                     amount_paid=body.get("amount_paid"),
@@ -642,10 +746,10 @@ class InternalManagementRepository:
         with self.db_telearseg.session_factory() as session:
             try:
                 stmt = (
-                    select(FinancialTicketManagement, TicketsManagement)
+                    select(FinancialTicketManagement, InspectionTechnical)
                     .join(
-                        TicketsManagement,
-                        TicketsManagement.id_ticket
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection
                         == FinancialTicketManagement.ticket_id,
                     )
                 )
@@ -692,51 +796,61 @@ class InternalManagementRepository:
     def update_ticket_technical(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
-                self._validate_update_body(body, "ticket_glpi")
-                ticket = self._get_ticket_by_glpi(session, body.get("ticket_glpi"))
-                management = self._get_latest_management(
-                    session,
-                    TechnicalTicketManagement,
-                    ticket.id_ticket,
-                    TechnicalTicketManagement.id_management_technical,
+                self._validate_update_body(body, "inspection_id")
+                ticket = self._get_inspection(session, body.get("inspection_id"))
+
+                management_stmt = select(TechnicalTicketManagement).where(
+                    TechnicalTicketManagement.inspection_id == ticket.id_inspection
                 )
+                if body.get("id_management_technical") is not None:
+                    management_stmt = management_stmt.where(
+                        TechnicalTicketManagement.id_management_technical
+                        == body.get("id_management_technical")
+                    )
+                management = session.execute(
+                    management_stmt.order_by(
+                        TechnicalTicketManagement.id_management_technical.desc()
+                    )
+                ).scalars().first()
+
                 if management is None:
                     raise CustomAPIException("Gestión técnica no encontrada", 404)
 
                 self._apply_fields(
-                    ticket,
-                    body,
-                    {
-                        "title_ticket": "title_ticket",
-                        "contact": "contact",
-                        "priority": "priority",
-                        "responsible": "responsible_ticket",
-                        "client_id": "client_id",
-                        "ubication_id": "ubication_id",
-                    },
-                )
-                self._apply_fields(
                     management,
                     body,
                     {
-                        "case_type": "case_type",
-                        "management_status": "management_status",
-                        "next_action": "next_action",
-                        "commitment_date": "commitment_date",
-                        "requires_material": "requires_material",
-                        "requires_monitoring": "requires_monitoring",
-                        "observations": "observations",
+                        "description": "description",
                         "status": "status",
                     },
                 )
-                self._set_updated_by(body, ticket, management)
+                self._set_updated_by(body, management)
+
+                # Los materiales se reemplazan completos con lo que envía el formulario
+                if "materials" in body:
+                    session.execute(
+                        delete(MaterialTechTicket).where(
+                            MaterialTechTicket.tech_ticket
+                            == management.id_management_technical
+                        )
+                    )
+                    for material in body.get("materials") or []:
+                        session.add(
+                            MaterialTechTicket(
+                                tech_ticket=management.id_management_technical,
+                                material_id=material.get("material_id"),
+                                material_description=material.get("material_description"),
+                                other=material.get("other"),
+                                quantity=material.get("quantity"),
+                            )
+                        )
 
                 if body.get("status") == 'Listo para cotizar':
                     ticket.management_area = "Comercial"
                     ticket.next_area = "Financiero"
 
                     new_history_area = HistoryAreaTicket(
-                        ticket_id=ticket.id_ticket,
+                        ticket_id=ticket.id_inspection,
                         previous_area="Técnica",
                         current_area="Comercial",
                         created_by=body.get('user')
@@ -760,12 +874,12 @@ class InternalManagementRepository:
     def update_ticket_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
-                self._validate_update_body(body, "ticket_id")
-                ticket = self._get_ticket_by_glpi(session, body.get("ticket_id"))
+                self._validate_update_body(body, "inspection_id")
+                ticket = self._get_inspection(session, body.get("inspection_id"))
                 management = self._get_latest_management(
                     session,
                     CommercialTicketManagement,
-                    ticket.id_ticket,
+                    ticket.id_inspection,
                     CommercialTicketManagement.id_management_commercial,
                 )
                 if management is None:
@@ -795,12 +909,12 @@ class InternalManagementRepository:
                 )
                 self._set_updated_by(body, management)
 
-                if body.get('status_id') == 5: 
+                if body.get('status_id') == 5 and ticket.management_area == 'Comercial':
                     ticket.management_area = 'Proyectos'
                     ticket.next_area = 'Financiera'
 
                     new_history_area = HistoryAreaTicket(
-                        ticket_id=ticket.id_ticket,
+                        ticket_id=ticket.id_inspection,
                         previous_area="Comercial",
                         current_area="Proyectos",
                         created_by=body.get('user')
@@ -823,12 +937,12 @@ class InternalManagementRepository:
     def update_ticket_financial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
-                self._validate_update_body(body, "ticket_id")
-                ticket = self._get_ticket_by_glpi(session, body.get("ticket_id"))
+                self._validate_update_body(body, "inspection_id")
+                ticket = self._get_inspection(session, body.get("inspection_id"))
                 management = self._get_latest_management(
                     session,
                     FinancialTicketManagement,
-                    ticket.id_ticket,
+                    ticket.id_inspection,
                     FinancialTicketManagement.id_management_financial,
                 )
                 if management is None:
@@ -860,6 +974,53 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
+    def approve_technical_inspection(self, body, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+
+                register_technical = session.execute(
+                    select(TechnicalTicketManagement).where(
+                        TechnicalTicketManagement.inspection_id == body.get("id_inspection")
+                    )
+                ).scalar_one_or_none()
+        
+                if register_technical is None:
+                    raise CustomAPIException("Registro técnico no encontrado", 404)
+
+                register_technical.status = "Aprobado"
+                register_technical.updated_by = body.get("user")
+
+                self._validate_update_body(body, "id_inspection")
+                self._validate_update_body(body, "user")
+                inspection = self._get_inspection(session, body.get("id_inspection"))
+
+                inspection.status = "Listo para cotizar"
+                inspection.updated_by = body.get("user")
+
+                if inspection.management_area == "Técnica":
+                    inspection.management_area = "Comercial"
+                    inspection.next_area = "Proyectos"
+
+                    new_history_area = HistoryAreaTicket(
+                        ticket_id=inspection.id_inspection,
+                        previous_area="Técnica",
+                        current_area="Comercial",
+                        created_by=body.get("user")
+                    )
+                    session.add(new_history_area)
+
+                session.commit()
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al aprobar la inspección técnica",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
     def approve_ticket_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
@@ -877,8 +1038,8 @@ class InternalManagementRepository:
 
 
                 ticket_management = session.execute(
-                    select(TicketsManagement).where(
-                        TicketsManagement.id_ticket == ticket_commercial.ticket_id
+                    select(InspectionTechnical).where(
+                        InspectionTechnical.id_inspection == ticket_commercial.ticket_id
                     )
                 ).scalar_one_or_none()
 
@@ -891,7 +1052,7 @@ class InternalManagementRepository:
                 ticket_management.updated_at = datetime.now()
 
                 new_history_area = HistoryAreaTicket(
-                    ticket_id=ticket_management.id_ticket,
+                    ticket_id=ticket_management.id_inspection,
                     previous_area="Proyectos",
                     current_area="Financiera",
                     created_by=body.get('user')
@@ -971,6 +1132,333 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
+
+    def get_inspection_technical(self, filters, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                # task_id_subquery = (
+                #     select(TaskTechnical.id_task)
+                #     .where(
+                #         TaskTechnical.inspection_id
+                #         == InspectionTechnical.id_inspection
+                #     )
+                #     .limit(1)
+                #     .scalar_subquery()
+                # )
+
+                # Estado del último registro comercial de la inspección
+                commercial_status_id = (
+                    select(CommercialTicketManagement.status_id)
+                    .where(CommercialTicketManagement.ticket_id == InspectionTechnical.id_inspection)
+                    .order_by(CommercialTicketManagement.id_management_commercial.desc())
+                    .limit(1)
+                    .correlate(InspectionTechnical)
+                    .scalar_subquery()
+                )
+                commercial_status = (
+                    select(CommercialTicketStatus.name)
+                    .where(CommercialTicketStatus.id_status == commercial_status_id)
+                    .scalar_subquery()
+                )
+
+                stmt = select(
+                    InspectionTechnical,
+                    TaskTechnical.id_task.label("project_id"),
+                    commercial_status_id.label("commercial_status_id"),
+                    commercial_status.label("commercial_status"),
+                    TechnicalTicketManagement.id_management_technical.label("technical_id"),
+                ).outerjoin(
+                    TaskTechnical,
+                    TaskTechnical.inspection_id == InspectionTechnical.id_inspection
+                ).outerjoin(
+                    TechnicalTicketManagement,
+                    TechnicalTicketManagement.inspection_id == InspectionTechnical.id_inspection
+                )
+
+                conditions = []
+
+                if filters.get("start_date"):
+                    conditions.append(InspectionTechnical.created_at >= filters["start_date"])
+                if filters.get("end_date"):
+                    conditions.append(InspectionTechnical.created_at <= filters["end_date"])
+                if filters.get("inspection_id") is not None:
+                    conditions.append(InspectionTechnical.id_inspection == filters["inspection_id"])
+                if filters.get("status"):
+                    conditions.append(InspectionTechnical.status == filters["status"])
+                if filters.get("responsible"):
+                    conditions.append(InspectionTechnical.responsible_id == filters["responsible"])
+                if filters.get("client_id") is not None:
+                    conditions.append(InspectionTechnical.client_id == filters["client_id"])
+                if filters.get("ubication_id") is not None:
+                    conditions.append(InspectionTechnical.ubication_id == filters["ubication_id"])
+                if filters.get("priority"):
+                    conditions.append(InspectionTechnical.priority == filters["priority"])
+                if filters.get("id_inspection"):
+                    conditions.append(InspectionTechnical.id_inspection == filters["id_inspection"])
+                if filters.get("responsible_id"):
+                    conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
+                if filters.get("pending_technical") == 'true':
+                    # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
+                    conditions.append(
+                        TechnicalTicketManagement.id_management_technical.is_(None)
+                    )
+
+                if filters.get("pending_commercial") == 'true':
+                    conditions.append(
+                        InspectionTechnical.status == "Listo para cotizar"
+                    )
+
+                    conditions.append(
+                        ~exists().where(
+                            CommercialTicketManagement.ticket_id
+                            == InspectionTechnical.id_inspection
+                        )
+                    )
+
+                if filters.get("ready_for_project") == 'true':
+                    # Comercial aprobado (status_id 5) y aún sin proyecto creado
+                    conditions.append(commercial_status_id == 5)
+                    conditions.append(TaskTechnical.id_task.is_(None))
+
+                if conditions:
+                    stmt = stmt.where(and_(*conditions))
+
+                return session.execute(
+                    stmt.order_by(InspectionTechnical.created_at.desc())
+                ).all()
+
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener las inspecciones de la base de datos",
+                    internal,
+                    external,
+                )
+
+    def get_dashboard_counts(self, filters, internal, external):
+        """Obtiene en una sola consulta todos los conteos del dashboard."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                date_conditions = self._inspection_date_conditions(filters)
+
+                def count_inspections(*conditions):
+                    return (
+                        select(func.count(InspectionTechnical.id_inspection))
+                        .where(*date_conditions, *conditions)
+                        .scalar_subquery()
+                    )
+
+                def count_commercial(*conditions):
+                    return (
+                        select(func.count(CommercialTicketManagement.id_management_commercial))
+                        .join(
+                            InspectionTechnical,
+                            InspectionTechnical.id_inspection
+                            == CommercialTicketManagement.ticket_id,
+                        )
+                        .where(*date_conditions, *conditions)
+                        .scalar_subquery()
+                    )
+
+                def count_financial(status):
+                    return (
+                        select(func.count(FinancialTicketManagement.id_management_financial))
+                        .join(
+                            InspectionTechnical,
+                            InspectionTechnical.id_inspection
+                            == FinancialTicketManagement.ticket_id,
+                        )
+                        .where(*date_conditions, FinancialTicketManagement.status == status)
+                        .scalar_subquery()
+                    )
+
+                # Mismas condiciones que /inspection?pending_technical=true,
+                # /inspection?pending_commercial=true,
+                # /register-commercial?is_registred=true y ?pending_financial=true
+                pending_technical = count_inspections(
+                    ~exists().where(
+                        TechnicalTicketManagement.inspection_id
+                        == InspectionTechnical.id_inspection
+                    )
+                )
+                pending_commercial = count_inspections(
+                    ~exists().where(
+                        CommercialTicketManagement.ticket_id
+                        == InspectionTechnical.id_inspection
+                    )
+                )
+                pending_projects = count_commercial(
+                    CommercialTicketManagement.status_id == 5,
+                    InspectionTechnical.management_area == "Proyectos",
+                    exists().where(
+                        and_(
+                            TaskTechnical.inspection_id
+                            == CommercialTicketManagement.ticket_id,
+                            TaskTechnical.status == "Finalizado",
+                        )
+                    ),
+                )
+                pending_financial = count_commercial(
+                    InspectionTechnical.management_area == "Financiera",
+                    InspectionTechnical.next_area == "Financiera",
+                    ~exists().where(
+                        FinancialTicketManagement.ticket_id
+                        == CommercialTicketManagement.ticket_id
+                    ),
+                )
+
+                # Proyectos finalizados: aprobados en /approve-commercial-ticket,
+                # que registra el paso Proyectos -> Financiera en el historial.
+                finished_projects = (
+                    select(func.count(func.distinct(HistoryAreaTicket.ticket_id)))
+                    .join(
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection == HistoryAreaTicket.ticket_id,
+                    )
+                    .where(
+                        *date_conditions,
+                        HistoryAreaTicket.previous_area == "Proyectos",
+                        HistoryAreaTicket.current_area == "Financiera",
+                    )
+                    .scalar_subquery()
+                )
+
+                stmt = select(
+                    pending_technical.label("pending_technical"),
+                    pending_commercial.label("pending_commercial"),
+                    pending_projects.label("pending_projects"),
+                    pending_financial.label("pending_financial"),
+                    count_inspections(
+                        InspectionTechnical.status == "Listo para cotizar"
+                    ).label("finished_technical"),
+                    count_commercial(
+                        CommercialTicketManagement.status_id == 5
+                    ).label("quotations_approved"),
+                    count_commercial(
+                        CommercialTicketManagement.status_id == 6
+                    ).label("quotations_rejected"),
+                    finished_projects.label("finished_projects"),
+                    count_financial("Cobrada").label("invoices_collected"),
+                    count_financial("Emitida").label("invoices_issued"),
+                )
+
+                return dict(session.execute(stmt).one()._mapping)
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los datos del dashboard",
+                    internal,
+                    external,
+                )
+
+    def get_dashboard_area_times(self, filters, internal, external):
+        """Devuelve el SLA promedio por área y el tiempo por área de cada inspección.
+
+        El tiempo en un área es la diferencia entre el registro del historial que
+        la inicia y el siguiente registro del mismo ticket (LEAD). Si no hay
+        siguiente, el ticket sigue en esa área y se mide hasta el momento actual.
+        """
+        with self.db_telearseg.session_factory() as session:
+            try:
+                left_at = func.lead(HistoryAreaTicket.created_at).over(
+                    partition_by=HistoryAreaTicket.ticket_id,
+                    order_by=(HistoryAreaTicket.created_at, HistoryAreaTicket.id_history),
+                )
+                intervals = (
+                    select(
+                        HistoryAreaTicket.ticket_id,
+                        HistoryAreaTicket.current_area.label("area"),
+                        HistoryAreaTicket.created_at.label("entered_at"),
+                        left_at.label("left_at"),
+                    )
+                    .join(
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection == HistoryAreaTicket.ticket_id,
+                    )
+                    .where(*self._inspection_date_conditions(filters))
+                    .subquery()
+                )
+                seconds = func.extract(
+                    "epoch",
+                    func.coalesce(intervals.c.left_at, func.localtimestamp())
+                    - intervals.c.entered_at,
+                )
+
+                sla_rows = session.execute(
+                    select(
+                        intervals.c.area,
+                        func.avg(seconds).label("average_seconds"),
+                        func.count().label("transitions"),
+                    )
+                    .where(intervals.c.left_at.is_not(None))
+                    .group_by(intervals.c.area)
+                ).all()
+
+                inspection_rows = session.execute(
+                    select(
+                        InspectionTechnical.id_inspection,
+                        InspectionTechnical.title_ticket,
+                        InspectionTechnical.management_area,
+                        intervals.c.area,
+                        func.sum(seconds).label("seconds"),
+                        func.bool_or(intervals.c.left_at.is_(None)).label("in_progress"),
+                    )
+                    .join(
+                        InspectionTechnical,
+                        InspectionTechnical.id_inspection == intervals.c.ticket_id,
+                    )
+                    .group_by(
+                        InspectionTechnical.id_inspection,
+                        InspectionTechnical.title_ticket,
+                        InspectionTechnical.management_area,
+                        intervals.c.area,
+                    )
+                    .order_by(
+                        InspectionTechnical.id_inspection.desc(),
+                        func.min(intervals.c.entered_at),
+                    )
+                ).all()
+
+                return sla_rows, inspection_rows
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los tiempos por área",
+                    internal,
+                    external,
+                )
+
+    def get_project_activities(self, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                total = func.count(TechnicalRecord.id_record)
+                return session.execute(
+                    select(
+                        TaskTechnical.id_task,
+                        TaskTechnical.code,
+                        total.label("total_records"),
+                    )
+                    .outerjoin(TechnicalRecord, TechnicalRecord.task_id == TaskTechnical.id_task)
+                    .group_by(TaskTechnical.id_task, TaskTechnical.code)
+                    .order_by(total.desc(), TaskTechnical.id_task)
+                ).all()
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener las actividades por proyecto",
+                    internal,
+                    external,
+                )
+
+    @staticmethod
+    def _inspection_date_conditions(filters):
+        conditions = []
+        if filters.get("start_date"):
+            conditions.append(InspectionTechnical.created_at >= filters["start_date"])
+        if filters.get("end_date"):
+            conditions.append(InspectionTechnical.created_at <= filters["end_date"])
+        return conditions
+
     @staticmethod
     def _validate_update_body(body, identifier):
         if not isinstance(body, dict):
@@ -1002,13 +1490,13 @@ class InternalManagementRepository:
                 record.updated_by = body["user"]
 
     @staticmethod
-    def _get_ticket_by_glpi(session, ticket_glpi):
-        ticket = session.execute(
-            select(TicketsManagement).where(
-                TicketsManagement.ticket_glpi == ticket_glpi
+    def _get_inspection(session, inspection_id):
+        inspection = session.execute(
+            select(InspectionTechnical).where(
+                InspectionTechnical.id_inspection == inspection_id
             )
         ).scalar_one_or_none()
-        
-        if ticket is None:
-            raise CustomAPIException("Ticket no encontrado", 404)
-        return ticket
+
+        if inspection is None:
+            raise CustomAPIException("Inspección no encontrada", 404)
+        return inspection

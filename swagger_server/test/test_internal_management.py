@@ -114,6 +114,21 @@ class FakeReadRepository:
         return [(management, ticket())]
 
 
+class FakeInspectionRepository:
+    def __init__(self):
+        self.filters = None
+
+    def get_inspection_technical(self, filters, internal, external):
+        self.filters = filters
+        return [
+            ticket(
+                id_inspection=7,
+                ticket_glpi=9876,
+                title_ticket="Inspeccion de sitio",
+            )
+        ]
+
+
 class FakeWriteSession:
     def __init__(self):
         self.ticket = ticket()
@@ -276,8 +291,66 @@ class TestInternalManagementUseCase(unittest.TestCase):
         self.assertEqual("FIN-2026-0010", result[0]["code_management"])
         self.assertEqual(Decimal("100.00"), result[0]["amount_pending"])
 
+    def test_get_inspection_technical_returns_a_list_of_inspections(self):
+        repository = FakeInspectionRepository()
+        use_case = InternalManagementUseCase(repository)
+
+        result = use_case.get_inspection_technical(
+            {},
+            {"ticket_glpi": "9876", "search": "sitio"},
+            "internal",
+            "external",
+        )
+
+        self.assertIsInstance(result, list)
+        self.assertEqual(9876, repository.filters["ticket_glpi"])
+        self.assertEqual("Inspeccion de sitio", result[0]["title_ticket"])
+
 
 class TestInternalManagementRepository(unittest.TestCase):
+    def test_get_inspection_technical_returns_model_instances(self):
+        inspection = ticket()
+
+        class Result:
+            def scalars(self):
+                return self
+
+            def all(self):
+                return [inspection]
+
+        class Session:
+            def __init__(self):
+                self.statement = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def execute(self, statement):
+                self.statement = statement
+                return Result()
+
+            def close(self):
+                pass
+
+        session = Session()
+        repository = InternalManagementRepository.__new__(
+            InternalManagementRepository
+        )
+        repository.db_telearseg = SimpleNamespace(session_factory=lambda: session)
+
+        result = repository.get_inspection_technical(
+            {"ticket_glpi": 1234, "search": "enlace"},
+            "internal",
+            "external",
+        )
+
+        self.assertEqual([inspection], result)
+        self.assertIn("inspection_technical.ticket_glpi", str(session.statement))
+        self.assertIn("LIKE", str(session.statement))
+
     def test_get_ticket_technical_counts_then_limits_the_joined_query(self):
         class Result:
             def __init__(self, total=None, rows=None):
