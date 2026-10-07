@@ -199,6 +199,9 @@ class InternalManagementUseCase:
     def get_type_solution(self, internal, external):
         return self.internal_management_repository.get_type_solution(internal, external)
 
+    def get_providers(self, internal, external):
+        return self.internal_management_repository.get_providers(internal, external)
+
     def get_commercial_ticket_status(self, internal, external):
         return self.internal_management_repository.get_commercial_ticket_status(internal, external)
 

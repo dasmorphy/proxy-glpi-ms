@@ -541,9 +541,92 @@ ALTER TABLE IF EXISTS internal_management.material_tech_ticket
 ALTER TABLE IF EXISTS internal_management.technical_ticket_management
     ADD CONSTRAINT technical_ticket_inspection_unique UNIQUE (inspection_id);
 
+-------------------------------------------------------------------------------------------------------------------------------------
+
+CREATE TABLE internal_management.providers_products
+(
+    id_provider integer NOT NULL,
+    ruc text,
+    provider text,
+    address text,
+    seller text,
+    number_contact text,
+    email text,
+    status text,
+    created_by text,
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (id_provider)
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.providers_products
+    OWNER to telearseg;
+
+CREATE SEQUENCE internal_management.providers_products_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.providers_products_id_seq
+    OWNED BY internal_management.providers_products.id_provider;
+
+ALTER SEQUENCE internal_management.providers_products_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.providers_products
+ALTER COLUMN id_provider SET DEFAULT nextval('internal_management.providers_products_id_seq'::regclass);
 
 
+-----------------------------------------------------------------------------------------------------------------------------
+
+ALTER TABLE IF EXISTS technical.technical_equipment
+    ADD COLUMN provider_id integer;
+ALTER TABLE IF EXISTS technical.technical_equipment
+    ADD CONSTRAINT provider_fkey FOREIGN KEY (provider_id)
+    REFERENCES internal_management.providers_products (id_provider) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE NO ACTION;
+CREATE INDEX IF NOT EXISTS fki_provider_fkey
+    ON technical.technical_equipment(provider_id);
 
 
+----------------------------------------------------------------------------------------------------------------------------
 
 
+CREATE TABLE internal_management.equipment_images
+(
+    id_image integer NOT NULL,
+    equipment_tech_id integer,
+    image_path text,
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (id_image),
+    CONSTRAINT equipment_id_fkey FOREIGN KEY (equipment_tech_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.equipment_images
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.equipment_images_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.equipment_images_id_seq
+    OWNED BY internal_management.equipment_images.id_image;
+
+ALTER SEQUENCE internal_management.equipment_images_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.equipment_images
+ALTER COLUMN id_image SET DEFAULT nextval('internal_management.equipment_images_id_seq'::regclass);

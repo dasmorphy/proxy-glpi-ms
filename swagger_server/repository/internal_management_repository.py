@@ -14,6 +14,7 @@ from swagger_server.models.db.financial_ticket_management import FinancialTicket
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
 from swagger_server.models.db.location import ClientLocation
 from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
+from swagger_server.models.db.providers_products import ProvidersProducts
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_record import TechnicalRecord
@@ -660,6 +661,35 @@ class InternalManagementRepository:
                     {
                         "id_status": c.id_status,
                         "name": c.name,
+                        "created_at": c.created_at,
+                        "created_by": c.created_by,
+                    }
+                    for c in result.scalars().all()
+                ]
+                return data
+            except Exception as exception:
+                logger.error('Error: {}', str(exception), internal=internal, external=external)
+                if isinstance(exception, CustomAPIException):
+                    raise exception
+
+                raise CustomAPIException("Error al obtener en la base de datos", 500)
+
+    def get_providers(self, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                result = session.execute(
+                    select(ProvidersProducts)
+                )
+                data = [
+                    {
+                        "id_provider": c.id_provider,
+                        "name": c.provider,
+                        "ruc": c.ruc,
+                        "address": c.address,
+                        "seller": c.seller,
+                        "number_contact": c.number_contact,
+                        "email": c.email,
+                        "status": c.status,
                         "created_at": c.created_at,
                         "created_by": c.created_by,
                     }
