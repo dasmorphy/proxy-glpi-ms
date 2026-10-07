@@ -319,7 +319,7 @@ class InternalManagementRepository:
                 ).scalar_one_or_none()
 
                 if ticket is None:
-                    raise CustomAPIException("Ticket no encontrado", 404)
+                    raise CustomAPIException("Inspección no encontrada", 404)
 
 
                 if body.get('status_id') == 5: 
@@ -735,7 +735,7 @@ class InternalManagementRepository:
                     )
                 ).scalar_one_or_none()
                 if ticket is None:
-                    raise CustomAPIException("Ticket no encontrado", 404)
+                    raise CustomAPIException("Inspección no encontrada", 404)
 
                 ticket.management_area = "Financiera"
 
