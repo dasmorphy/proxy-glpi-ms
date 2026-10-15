@@ -26,6 +26,11 @@ class Client(Base):
         nullable=False
     )
 
+    client_company_id = Column(
+        Integer,
+        nullable=False
+    )
+
     created_by = Column(Text)
     updated_by = Column(Text)
 

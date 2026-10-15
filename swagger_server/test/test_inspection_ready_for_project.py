@@ -71,10 +71,18 @@ def build_repository(session):
 class TestInspectionReadyForProjectUseCase(unittest.TestCase):
     def test_serializes_commercial_status_and_ready_flag(self):
         repository = FakeInspectionRepository([
-            (inspection(id_inspection=1), None, 5, "Aprobada", 11),
-            (inspection(id_inspection=2), 40, 5, "Aprobada", 12),
-            (inspection(id_inspection=3), None, 6, "Rechazada", None),
-            (inspection(id_inspection=4), None, None, None, None),
+            (inspection(id_inspection=1), None, 5, "Aprobada", 11, "0991234567001", "Empresa SA", 9, [
+                SimpleNamespace(
+                    id_document=3,
+                    document_path="inspection-documents/1_a1b2c3d4e5f6_informe_final.pdf",
+                    name_document=None,
+                    type_document="application/pdf",
+                    created_at=datetime(2026, 1, 3),
+                ),
+            ]),
+            (inspection(id_inspection=2), 40, 5, "Aprobada", 12, None, None, None, []),
+            (inspection(id_inspection=3), None, 6, "Rechazada", None, None, None, None, []),
+            (inspection(id_inspection=4), None, None, None, None, None, None, None, []),
         ])
         use_case = InternalManagementUseCase(repository)
 
@@ -90,8 +98,22 @@ class TestInspectionReadyForProjectUseCase(unittest.TestCase):
             [row["ready_for_project"] for row in result],
         )
         self.assertEqual(40, result[1]["project_id"])
+        self.assertEqual(9, result[0]["client_company_id"])
         self.assertEqual(11, result[0]["technical_id"])
         self.assertIsNone(result[3]["technical_id"])
+        self.assertEqual("0991234567001", result[0]["identity"])
+        self.assertIsNone(result[1]["identity"])
+        self.assertEqual(
+            [{
+                "id_document": 3,
+                "document_path": "inspection-documents/1_a1b2c3d4e5f6_informe_final.pdf",
+                "document_name": "informe_final.pdf",
+                "type": "application/pdf",
+                "created_at": datetime(2026, 1, 3),
+            }],
+            result[0]["documents"],
+        )
+        self.assertEqual([], result[1]["documents"])
 
 
 class TestInspectionReadyForProjectRepository(unittest.TestCase):
@@ -105,6 +127,10 @@ class TestInspectionReadyForProjectRepository(unittest.TestCase):
         self.assertIn("commmercial_ticket_status.name", sql)
         self.assertNotIn("task_technical.id_task IS NULL", sql)
         self.assertIn("technical_id", sql)
+        self.assertIn("client_companies.identity", sql)
+        self.assertIn("client_companies.id_company AS client_company_id", sql)
+        self.assertIn("client_companies.id_company = technical.clients.client_company_id", sql)
+        self.assertIn("technical.clients.id_client = internal_management.inspection_technical.client_id", sql)
 
     def test_ready_for_project_filters_approved_without_project(self):
         session = FakeSession()
@@ -116,6 +142,38 @@ class TestInspectionReadyForProjectRepository(unittest.TestCase):
         sql = str(session.statement.compile(compile_kwargs={"literal_binds": True}))
         self.assertIn("task_technical.id_task IS NULL", sql)
         self.assertIn("= 5", sql)
+
+    def test_groups_documents_by_inspection_without_duplicating_rows(self):
+        first, second = inspection(id_inspection=1), inspection(id_inspection=2)
+        documents = [
+            SimpleNamespace(id_document=1, inspection_id=1, document_path="a.pdf"),
+            SimpleNamespace(id_document=2, inspection_id=1, document_path="b.png"),
+        ]
+
+        class Session(FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.statements = []
+
+            def execute(self, statement):
+                self.statements.append(statement)
+                if len(self.statements) == 1:
+                    return SimpleNamespace(all=lambda: [
+                        (first, None, None, None, None, None, None, None),
+                        (second, None, None, None, None, None, None, None),
+                    ])
+                return SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(all=lambda: documents)
+                )
+
+        session = Session()
+        rows = build_repository(session).get_inspection_technical({}, "internal", "external")
+
+        self.assertEqual(2, len(rows))
+        self.assertEqual(documents, rows[0][8])
+        self.assertEqual([], rows[1][8])
+        self.assertIn("inspection_documents", str(session.statements[1]))
+        self.assertNotIn("inspection_documents", str(session.statements[0]))
 
     def test_pending_technical_filters_inspections_without_technical_record(self):
         session = FakeSession()

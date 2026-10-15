@@ -4,6 +4,7 @@ from loguru import logger
 from sqlalchemy import and_, delete, exists, func, select
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
+from swagger_server.models.db.client_companies import ClientCompany
 from swagger_server.models.db.client_projects import Client
 from swagger_server.models.db.commercial_followup import CommercialFollowup
 from swagger_server.models.db.commercial_origin import CommercialOrigin
@@ -12,15 +13,26 @@ from swagger_server.models.db.commercial_ticket_status import CommercialTicketSt
 from swagger_server.models.db.commercial_type_solution import CommercialTypeSolution
 from swagger_server.models.db.financial_ticket_management import FinancialTicketManagement
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
+from swagger_server.models.db.inspection_documents import InspectionDocuments
 from swagger_server.models.db.location import ClientLocation
 from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
 from swagger_server.models.db.providers_products import ProvidersProducts
+from swagger_server.models.db.sale_additional_materials import SaleAdditionalMaterials
+from swagger_server.models.db.sale_quotation import SaleQuotation
+from swagger_server.models.db.sale_quotation_item import SaleQuotationItem
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_record import TechnicalRecord
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.resources.databases.postgresql import PostgreSQLClient
+from swagger_server.utils.inspection_documents import (
+    clean_files,
+    document_mimetype,
+    remove_documents,
+    save_document,
+    validate_documents,
+)
 
 
 class InternalManagementRepository:
@@ -44,10 +56,152 @@ class InternalManagementRepository:
     def generate_code_inspection(management_id):
         return f"INS-{datetime.now().year}-{management_id:04d}"
 
+    @staticmethod
+    def _save_sale_quotation(session, inspection_id, quotation, user):
+        """Guarda la proforma de la inspección. Si ya existe una se actualiza su
+        cabecera y sus items se reemplazan completos con los recibidos."""
+        sale_quotation = session.execute(
+            select(SaleQuotation)
+            .where(SaleQuotation.inspection_id == inspection_id)
+            .order_by(SaleQuotation.id_quote.desc())
+        ).scalars().first()
 
-    def post_inspection_technical(self, body, internal, external):
+        if sale_quotation is None:
+            sale_quotation = SaleQuotation(
+                inspection_id=inspection_id,
+                created_by=user,
+            )
+            session.add(sale_quotation)
+        else:
+            # Los componentes referencian a los items: se eliminan primero
+            session.execute(
+                delete(SaleAdditionalMaterials).where(
+                    SaleAdditionalMaterials.sale_quote_id == sale_quotation.id_quote
+                )
+            )
+            session.execute(
+                delete(SaleQuotationItem).where(
+                    SaleQuotationItem.sale_quote_id == sale_quotation.id_quote
+                )
+            )
+
+        sale_quotation.client_company = quotation.get('client_company')
+        sale_quotation.iva = quotation.get('iva')
+        sale_quotation.iva_rate = quotation.get('iva_rate')
+        sale_quotation.subtotal = quotation.get('subtotal')
+        sale_quotation.total = quotation.get('total')
+        sale_quotation.updated_by = user
+        session.flush()
+
+        for item in quotation.get('items') or []:
+            quotation_item = SaleQuotationItem(
+                sale_quote_id=sale_quotation.id_quote,
+                material_id=item.get('material_id'),
+                item_number=item.get('item'),
+                is_labor=item.get('is_labor'),
+                is_bundle=item.get('is_bundle'),
+                is_new=item.get('is_new'),
+                # Solo los productos nuevos y la mano de obra traen modelo y descripción
+                model=item.get('model'),
+                description=item.get('description'),
+                base_price=item.get('base_price'),
+                profit_margin=item.get('profit_margin'),
+                profit_margin_dollar=item.get('profit_margin_dollar'),
+                quantity=item.get('quantity'),
+                total=item.get('total'),
+                created_by=user,
+                updated_by=user,
+            )
+            session.add(quotation_item)
+
+            if not item.get('is_bundle'):
+                continue
+
+            session.flush()
+            for component in item.get('components') or []:
+                session.add(SaleAdditionalMaterials(
+                    sale_quote_id=sale_quotation.id_quote,
+                    quotation_item_id=quotation_item.id_item,
+                    material_id=component.get('material_id'),
+                    base_price=component.get('base_price'),
+                    profit_margin=component.get('profit_margin'),
+                    profit_margin_dollar=component.get('profit_margin_dollar'),
+                    quantity=component.get('quantity'),
+                    total=component.get('total'),
+                    created_by=user,
+                    updated_by=user,
+                ))
+
+    @staticmethod
+    def _get_sale_quotations(session, inspection_ids):
+        """Retorna {inspection_id: (proforma, items, componentes)} con la última
+        proforma de cada inspección, en consultas aparte para no duplicar filas."""
+        if not inspection_ids:
+            return {}
+
+        latest_by_inspection = {}
+        for quotation in session.execute(
+            select(SaleQuotation)
+            .where(SaleQuotation.inspection_id.in_(inspection_ids))
+            .order_by(SaleQuotation.id_quote)
+        ).scalars().all():
+            latest_by_inspection[quotation.inspection_id] = quotation
+
+        if not latest_by_inspection:
+            return {}
+
+        quote_ids = [quotation.id_quote for quotation in latest_by_inspection.values()]
+        items_by_quote = {}
+        for item in session.execute(
+            select(SaleQuotationItem)
+            .where(SaleQuotationItem.sale_quote_id.in_(quote_ids))
+            .order_by(SaleQuotationItem.item_number, SaleQuotationItem.id_item)
+        ).scalars().all():
+            items_by_quote.setdefault(item.sale_quote_id, []).append(item)
+
+        components_by_quote = {}
+        for component in session.execute(
+            select(SaleAdditionalMaterials)
+            .where(SaleAdditionalMaterials.sale_quote_id.in_(quote_ids))
+            .order_by(SaleAdditionalMaterials.id_extra)
+        ).scalars().all():
+            components_by_quote.setdefault(component.sale_quote_id, []).append(component)
+
+        return {
+            inspection_id: (
+                quotation,
+                items_by_quote.get(quotation.id_quote, []),
+                components_by_quote.get(quotation.id_quote, []),
+            )
+            for inspection_id, quotation in latest_by_inspection.items()
+        }
+
+    @staticmethod
+    def _save_inspection_documents(session, inspection_id, files, saved_paths):
+        """Escribe los archivos en disco y registra cada ruta en inspection_documents.
+
+        Las rutas escritas se agregan a saved_paths para poder eliminarlas si la
+        transacción falla antes del commit.
+        """
+        for file in files:
+            document_path = save_document(file, inspection_id)
+            saved_paths.append(document_path)
+            session.add(
+                InspectionDocuments(
+                    inspection_id=inspection_id,
+                    document_path=document_path,
+                    name_document=file.filename,
+                    type_document=document_mimetype(file.filename, file.mimetype),
+                )
+            )
+
+
+    def post_inspection_technical(self, body, internal, external, files=None):
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
                 next_area = "Proyectos" if current_area == "Comercial" else "Comercial"
 
@@ -88,10 +242,14 @@ class InternalManagementRepository:
 
 
                 session.add(new_history_area)
+                self._save_inspection_documents(
+                    session, new_inspection.id_inspection, files, saved_paths
+                )
                 session.commit()
 
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 logger.error('Error: {}', str(exception), internal=internal, external=external)
                 if isinstance(exception, CustomAPIException):
                     raise exception
@@ -155,9 +313,12 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
-    def post_ticket_technical(self, body, internal, external):
+    def post_ticket_technical(self, body, internal, external, files=None):
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 inspection = session.execute(
                     select(InspectionTechnical).where(
                         InspectionTechnical.id_inspection == body.get('inspection_id')
@@ -205,10 +366,14 @@ class InternalManagementRepository:
                     )
                     session.add(new_material)
 
+                self._save_inspection_documents(
+                    session, inspection.id_inspection, files, saved_paths
+                )
                 session.commit()
 
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 logger.error('Error: {}', str(exception), internal=internal, external=external)
                 if isinstance(exception, CustomAPIException):
                     raise exception
@@ -309,9 +474,12 @@ class InternalManagementRepository:
                 )
 
 
-    def post_ticket_commercial(self, body, internal, external):
+    def post_ticket_commercial(self, body, internal, external, files=None):
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 ticket = session.execute(
                     select(InspectionTechnical).where(
                         InspectionTechnical.id_inspection == body.get('inspection_id')
@@ -345,12 +513,12 @@ class InternalManagementRepository:
                     type_solution_id=body.get('type_solution_id'),
                     quoted_amount=body.get('quoted_amount'),
                     probability_closing=body.get('probability_closing'),
-                    closing_date=body.get('closing_date'),
+                    closing_date= datetime.now() if body.get('status_id') == 5 or body.get('status_id') == 6 else None,
                     next_action=body.get('next_action'),
                     responsible_next_action=body.get('responsible_next_action'),
                     requires_technical=body.get('requires_technical'),
                     requires_material=body.get('requires_material'),
-                    scheduled_start_date=body.get('scheduled_start_date'),
+                    # scheduled_start_date=body.get('scheduled_start_date'),
                     contract_received=body.get('contract_received'),
                     date_finish=body.get('date_finish'),
                     reason_loss=body.get('reason_loss'),
@@ -365,10 +533,21 @@ class InternalManagementRepository:
                 new_register.code_management = self.generate_code_commercial(
                     new_register.id_management_commercial
                 )
+                if body.get('sale_quotation'):
+                    self._save_sale_quotation(
+                        session,
+                        ticket.id_inspection,
+                        body['sale_quotation'],
+                        body.get('user'),
+                    )
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
 
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 logger.error('Error: {}', str(exception), internal=internal, external=external)
                 if isinstance(exception, CustomAPIException):
                     raise exception
@@ -469,9 +648,17 @@ class InternalManagementRepository:
                 if conditions:
                     stmt = stmt.where(and_(*conditions))
 
-                return session.execute(
+                rows = session.execute(
                     stmt.order_by(CommercialTicketManagement.created_at.desc())
                 ).all()
+
+                quotations = self._get_sale_quotations(
+                    session, {row[1].id_inspection for row in rows}
+                )
+                return [
+                    (*row, quotations.get(row[1].id_inspection))
+                    for row in rows
+                ]
             except Exception as exception:
                 self._raise_database_error(
                     exception,
@@ -568,52 +755,7 @@ class InternalManagementRepository:
         if filters.get("priority"):
             conditions.append(InspectionTechnical.priority == filters["priority"])
         return conditions
-
-    def _get_client_and_location_names(self, client_ids, location_ids, internal, external):
-        """Obtiene catálogos de Zentinel en dos consultas masivas."""
-        unique_client_ids = sorted(set(client_ids))
-        unique_location_ids = sorted(set(location_ids))
-        if not unique_client_ids and not unique_location_ids:
-            return {}, {}
-
-        with self.db_zentinel.session_factory() as session:
-            try:
-                client_names = {}
-                location_names = {}
-
-                if unique_client_ids:
-                    client_names = dict(
-                        session.execute(
-                            select(
-                                Client.id_client,
-                                Client.name,
-                            ).where(
-                                Client.id_client.in_(unique_client_ids)
-                            )
-                        ).all()
-                    )
-
-                if unique_location_ids:
-                    location_names = dict(
-                        session.execute(
-                            select(
-                                ClientLocation.id_location,
-                                ClientLocation.name,
-                            ).where(
-                                ClientLocation.id_location.in_(unique_location_ids)
-                            )
-                        ).all()
-                    )
-
-                return client_names, location_names
-            except Exception as exception:
-                self._raise_database_error(
-                    exception,
-                    "Error al obtener clientes y ubicaciones desde Zentinel",
-                    internal,
-                    external,
-                )
-
+    
     @staticmethod
     def _raise_database_error(exception, message, internal, external):
         logger.error(
@@ -726,9 +868,12 @@ class InternalManagementRepository:
 
                 raise CustomAPIException("Error al obtener en la base de datos", 500)
 
-    def post_ticket_financial(self, body, internal, external):
+    def post_ticket_financial(self, body, internal, external, files=None):
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 ticket = session.execute(
                     select(InspectionTechnical).where(
                         InspectionTechnical.id_inspection == body.get("inspection_id")
@@ -760,9 +905,13 @@ class InternalManagementRepository:
                 financial_management.code_management = self.generate_code_financial(
                     financial_management.id_management_financial
                 )
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al insertar la gestión financiera en la base de datos",
@@ -929,7 +1078,7 @@ class InternalManagementRepository:
                         "responsible_next_action": "responsible_next_action",
                         "requires_technical": "requires_technical",
                         "requires_material": "requires_material",
-                        "scheduled_start_date": "scheduled_start_date",
+                        # "scheduled_start_date": "scheduled_start_date",
                         "contract_received": "contract_received",
                         "date_finish": "date_finish",
                         "reason_loss": "reason_loss",
@@ -938,6 +1087,14 @@ class InternalManagementRepository:
                     },
                 )
                 self._set_updated_by(body, management)
+
+                if body.get('sale_quotation'):
+                    self._save_sale_quotation(
+                        session,
+                        ticket.id_inspection,
+                        body['sale_quotation'],
+                        body.get('user'),
+                    )
 
                 if body.get('status_id') == 5 and ticket.management_area == 'Comercial':
                     ticket.management_area = 'Proyectos'
@@ -1197,14 +1354,23 @@ class InternalManagementRepository:
                     commercial_status_id.label("commercial_status_id"),
                     commercial_status.label("commercial_status"),
                     TechnicalTicketManagement.id_management_technical.label("technical_id"),
+                    ClientCompany.identity.label("identity"),
+                    ClientCompany.company_name.label("company_name"),
+                    ClientCompany.id_company.label("client_company_id"),
                 ).outerjoin(
                     TaskTechnical,
                     TaskTechnical.inspection_id == InspectionTechnical.id_inspection
                 ).outerjoin(
                     TechnicalTicketManagement,
                     TechnicalTicketManagement.inspection_id == InspectionTechnical.id_inspection
+                ).outerjoin(
+                    # inspección -> cliente -> empresa del cliente (RUC)
+                    Client,
+                    Client.id_client == InspectionTechnical.client_id
+                ).outerjoin(
+                    ClientCompany,
+                    ClientCompany.id_company == Client.client_company_id
                 )
-
                 conditions = []
 
                 if filters.get("start_date"):
@@ -1253,9 +1419,28 @@ class InternalManagementRepository:
                 if conditions:
                     stmt = stmt.where(and_(*conditions))
 
-                return session.execute(
+                rows = session.execute(
                     stmt.order_by(InspectionTechnical.created_at.desc())
                 ).all()
+
+                # Documentos en una sola consulta aparte para no duplicar filas por cada archivo
+                documents_by_inspection = {}
+                inspection_ids = [row[0].id_inspection for row in rows]
+                if inspection_ids:
+                    documents = session.execute(
+                        select(InspectionDocuments)
+                        .where(InspectionDocuments.inspection_id.in_(inspection_ids))
+                        .order_by(InspectionDocuments.id_document)
+                    ).scalars().all()
+                    for document in documents:
+                        documents_by_inspection.setdefault(
+                            document.inspection_id, []
+                        ).append(document)
+
+                return [
+                    (*row, documents_by_inspection.get(row[0].id_inspection, []))
+                    for row in rows
+                ]
 
             except Exception as exception:
                 self._raise_database_error(
@@ -1367,6 +1552,9 @@ class InternalManagementRepository:
                     count_commercial(
                         CommercialTicketManagement.status_id == 6
                     ).label("quotations_rejected"),
+                    count_commercial(
+                        CommercialTicketManagement.status_id == 7
+                    ).label("quotations_pending"),
                     finished_projects.label("finished_projects"),
                     count_financial("Cobrada").label("invoices_collected"),
                     count_financial("Emitida").label("invoices_issued"),
@@ -1518,6 +1706,26 @@ class InternalManagementRepository:
         if "user" in body:
             for record in records:
                 record.updated_by = body["user"]
+
+    def get_inspection_document(self, id_document, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                document = session.execute(
+                    select(InspectionDocuments).where(
+                        InspectionDocuments.id_document == id_document
+                    )
+                ).scalar_one_or_none()
+
+                if document is None:
+                    raise CustomAPIException("Documento no encontrado", 404)
+                return document
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener el documento de la base de datos",
+                    internal,
+                    external,
+                )
 
     @staticmethod
     def _get_inspection(session, inspection_id):

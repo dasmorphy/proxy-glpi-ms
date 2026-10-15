@@ -1,9 +1,10 @@
 from timeit import default_timer
+import json
 import re
 from urllib.parse import parse_qsl, urlsplit
 
 import connexion
-from flask import Response, g
+from flask import Response, g, send_file
 from flask.views import MethodView
 from flask import request
 from loguru import logger
@@ -93,42 +94,70 @@ class GlpiProxyView(MethodView):
         # multipart y cualquier otro tipo de contenido.
         return self._proxy("POST", endpoint)
 
-    def post_ticket_technical(self, body=None):
-        """Guarda el ticket del area tecnica en la base de datos.
+    @staticmethod
+    def _parse_multipart_request():
+        """Lee un multipart/form-data con los campos externalTransactionId,
+        channel, data (JSON en texto) y files (archivos opcionales, repetibles)."""
+        raw_data = request.form.get("data")
+        try:
+            data = json.loads(raw_data) if raw_data else {}
+        except ValueError:
+            raise CustomAPIException("El campo data debe ser un JSON válido", 400)
+        if not isinstance(data, dict):
+            raise CustomAPIException("El campo data debe ser un objeto", 400)
 
-        Guardado de ticket # noqa: E501
+        return (
+            request.form.get("externalTransactionId"),
+            request.form.get("channel"),
+            data,
+            request.files.getlist("files"),
+        )
 
-        :param body: 
-        :type body: dict | bytes
-
-        :rtype: ResponseGeneric
-        """
+    def _post_with_documents(self, function_name, post_method):
         internal_process = (None, None)
-        function_name = "post_ticket_technical"
         response = {}
         status_code = 500
         try:
-            if connexion.request.is_json:
-                body = connexion.request.get_json()  # noqa: E501
-                start_time = default_timer()
-                internal_transaction_id = str(generate_internal_transaction_id())
-                external_transaction_id = body.get("externalTransactionId")
-                internal_process = (internal_transaction_id, external_transaction_id)
-                response["internal_transaction_id"] = internal_transaction_id
-                response["external_transaction_id"] = external_transaction_id
-                message = f"start request: {function_name}, channel: {body.get('channel')}"
-                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
-                self.internal_management_use_case.post_ticket_technical(body.get('data'), internal_transaction_id, external_transaction_id)
-                response["error_code"] = 0
-                response["message"] = "Registro creado correctamente"
-                end_time = default_timer()
-                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
-                    internal=internal_transaction_id, external=external_transaction_id)
-                status_code = 200
+            start_time = default_timer()
+            internal_transaction_id = str(generate_internal_transaction_id())
+            external_transaction_id, channel, data, files = self._parse_multipart_request()
+            internal_process = (internal_transaction_id, external_transaction_id)
+            response["internal_transaction_id"] = internal_transaction_id
+            response["external_transaction_id"] = external_transaction_id
+            logger.info(
+                f"start request: {function_name}, channel: {channel}",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            post_method(
+                data,
+                internal_transaction_id,
+                external_transaction_id,
+                files=files,
+            )
+            response["error_code"] = 0
+            response["message"] = "Registro creado correctamente"
+            logger.info(
+                f"Fin de la transacción, procesada en : {default_timer() - start_time} milisegundos",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            status_code = 200
         except Exception as ex:
-            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
-            
+            response, status_code = CustomAPIException.check_exception(
+                ex,
+                function_name,
+                internal_process,
+            )
+
         return response, status_code
+
+    def post_ticket_technical(self, body=None, **kwargs):
+        """Guarda el ticket del area tecnica en la base de datos (multipart/form-data)."""
+        return self._post_with_documents(
+            "post_ticket_technical",
+            self.internal_management_use_case.post_ticket_technical,
+        )
 
     def _update_ticket_management(self, function_name, update_method):
         internal_process = (None, None)
@@ -206,49 +235,12 @@ class GlpiProxyView(MethodView):
         return response, status_code
 
 
-    def post_ticket_commercial(self, body=None):
-        """Guarda el ticket del area comercial en la base de datos."""
-        internal_process = (None, None)
-        function_name = "post_ticket_commercial"
-        response = {}
-        status_code = 500
-        try:
-            if connexion.request.is_json:
-                body = connexion.request.get_json()  # noqa: E501
-                start_time = default_timer()
-                internal_transaction_id = str(generate_internal_transaction_id())
-                external_transaction_id = body.get("externalTransactionId")
-                internal_process = (internal_transaction_id, external_transaction_id)
-                response["internal_transaction_id"] = internal_transaction_id
-                response["external_transaction_id"] = external_transaction_id
-                message = f"start request: {function_name}, channel: {body.get('channel')}"
-                logger.info(
-                    message,
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                self.internal_management_use_case.post_ticket_commercial(
-                    body.get('data'),
-                    internal_transaction_id,
-                    external_transaction_id,
-                )
-                response["error_code"] = 0
-                response["message"] = "Registro creado correctamente"
-                end_time = default_timer()
-                logger.info(
-                    f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                status_code = 200
-        except Exception as ex:
-            response, status_code = CustomAPIException.check_exception(
-                ex,
-                function_name,
-                internal_process,
-            )
-
-        return response, status_code
+    def post_ticket_commercial(self, body=None, **kwargs):
+        """Guarda el ticket del area comercial en la base de datos (multipart/form-data)."""
+        return self._post_with_documents(
+            "post_ticket_commercial",
+            self.internal_management_use_case.post_ticket_commercial,
+        )
 
     def put_ticket_commercial(self, body=None):
         return self._update_ticket_management(
@@ -462,49 +454,12 @@ class GlpiProxyView(MethodView):
 
         return response, status_code
 
-    def post_ticket_financial(self, body=None):
-        """Guarda la gestión del ticket del área financiera."""
-        internal_process = (None, None)
-        function_name = "post_ticket_financial"
-        response = {}
-        status_code = 500
-        try:
-            if connexion.request.is_json:
-                body = connexion.request.get_json()  # noqa: E501
-                start_time = default_timer()
-                internal_transaction_id = str(generate_internal_transaction_id())
-                external_transaction_id = body.get("externalTransactionId")
-                internal_process = (internal_transaction_id, external_transaction_id)
-                response["internal_transaction_id"] = internal_transaction_id
-                response["external_transaction_id"] = external_transaction_id
-                message = f"start request: {function_name}, channel: {body.get('channel')}"
-                logger.info(
-                    message,
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                self.internal_management_use_case.post_ticket_financial(
-                    body.get('data'),
-                    internal_transaction_id,
-                    external_transaction_id,
-                )
-                response["error_code"] = 0
-                response["message"] = "Registro creado correctamente"
-                end_time = default_timer()
-                logger.info(
-                    f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                status_code = 200
-        except Exception as ex:
-            response, status_code = CustomAPIException.check_exception(
-                ex,
-                function_name,
-                internal_process,
-            )
-
-        return response, status_code
+    def post_ticket_financial(self, body=None, **kwargs):
+        """Guarda la gestión del ticket del área financiera (multipart/form-data)."""
+        return self._post_with_documents(
+            "post_ticket_financial",
+            self.internal_management_use_case.post_ticket_financial,
+        )
 
     def put_ticket_financial(self, body=None):
         return self._update_ticket_management(
@@ -554,6 +509,39 @@ class GlpiProxyView(MethodView):
                 internal_process,
             )
 
+
+    def download_inspection_document(self, id_document, inline=False, **kwargs):
+        """Descarga (o muestra en el navegador con inline=true) un documento de inspección."""
+        internal_process = (None, None)
+        function_name = "download_inspection_document"
+        try:
+            start_time = default_timer()
+            internal_transaction_id = str(generate_internal_transaction_id())
+            external_transaction_id = request.headers.get('externalTransactionId')
+            internal_process = (internal_transaction_id, external_transaction_id)
+            logger.info(
+                f"start request: {function_name}, channel: {request.headers.get('channel')}",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            path, name, mimetype = self.internal_management_use_case.get_inspection_document(
+                id_document,
+                internal_transaction_id,
+                external_transaction_id,
+            )
+            logger.info(
+                f"Fin de la transacción, procesada en : {default_timer() - start_time} milisegundos",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            return send_file(
+                path,
+                mimetype=mimetype,
+                as_attachment=not inline,
+                download_name=name,
+            )
+        except Exception as ex:
+            return CustomAPIException.check_exception(ex, function_name, internal_process)
 
     def approve_technical_inspection(self, body=None):
         internal_process = (None, None)
@@ -789,42 +777,12 @@ class GlpiProxyView(MethodView):
         return response, status_code
 
 
-    def post_inspection_technical(self, body=None):
-        """Guarda la inspeccion tecnica en la base de datos.
-
-        Guardado de inspeccion # noqa: E501
-
-        :param body: 
-        :type body: dict | bytes
-
-        :rtype: ResponseGeneric
-        """
-        internal_process = (None, None)
-        function_name = "post_inspection_technical"
-        response = {}
-        status_code = 500
-        try:
-            if connexion.request.is_json:
-                body = connexion.request.get_json()  # noqa: E501
-                start_time = default_timer()
-                internal_transaction_id = str(generate_internal_transaction_id())
-                external_transaction_id = body.get("externalTransactionId")
-                internal_process = (internal_transaction_id, external_transaction_id)
-                response["internal_transaction_id"] = internal_transaction_id
-                response["external_transaction_id"] = external_transaction_id
-                message = f"start request: {function_name}, channel: {body.get('channel')}"
-                logger.info(message, internal=internal_transaction_id, external=external_transaction_id)
-                self.internal_management_use_case.post_inspection_technical(body.get('data'), internal_transaction_id, external_transaction_id)
-                response["error_code"] = 0
-                response["message"] = "Registro creado correctamente"
-                end_time = default_timer()
-                logger.info(f"Fin de la transacción, procesada en : {end_time - start_time} milisegundos",
-                    internal=internal_transaction_id, external=external_transaction_id)
-                status_code = 200
-        except Exception as ex:
-            response, status_code = CustomAPIException.check_exception(ex, function_name, internal_process)
-
-        return response, status_code
+    def post_inspection_technical(self, body=None, **kwargs):
+        """Guarda la inspeccion tecnica en la base de datos (multipart/form-data)."""
+        return self._post_with_documents(
+            "post_inspection_technical",
+            self.internal_management_use_case.post_inspection_technical,
+        )
 
     def get_dashboard(self):
         internal_process = (None, None)

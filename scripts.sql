@@ -285,7 +285,7 @@ CREATE TABLE internal_management.commercial_ticket_management
     responsible_next_action text,
     requires_technical boolean,
     requires_material boolean,
-    scheduled_start_date timestamp without time zone,
+    -- scheduled_start_date timestamp without time zone,
     contract_received boolean,
     date_finish timestamp without time zone,
     reason_loss text,
@@ -630,3 +630,239 @@ ALTER SEQUENCE internal_management.equipment_images_id_seq
 
 ALTER TABLE IF EXISTS internal_management.equipment_images
 ALTER COLUMN id_image SET DEFAULT nextval('internal_management.equipment_images_id_seq'::regclass);
+
+----------------------------------------------------------------------------------------------------------------------------------------
+
+CREATE TABLE internal_management.inspection_documents
+(
+    id_document integer NOT NULL,
+    inspection_id integer,
+    document_path text,
+    name_document text,
+    type_document text,
+    created_at timestamp without time zone DEFAULT now(),
+    PRIMARY KEY (id_document),
+    CONSTRAINT inspection_doc_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.inspection_documents
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.inspection_documents_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.inspection_documents_id_seq
+    OWNED BY internal_management.inspection_documents.id_document;
+
+ALTER SEQUENCE internal_management.inspection_documents_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.inspection_documents
+    ALTER COLUMN id_document SET DEFAULT nextval('internal_management.inspection_documents_id_seq'::regclass);
+
+
+-------------------------------------------------------------------------------------------------------------------------------
+
+
+ALTER TABLE IF EXISTS internal_management.inspection_technical
+    ADD CONSTRAINT client_inspection_fkey FOREIGN KEY (client_id)
+    REFERENCES technical.clients (id_client) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE NO ACTION;
+CREATE INDEX IF NOT EXISTS fki_client_inspection_fkey
+    ON internal_management.inspection_technical(client_id);
+
+ALTER TABLE IF EXISTS internal_management.inspection_technical
+    ADD CONSTRAINT location_inspection_fkey FOREIGN KEY (ubication_id)
+    REFERENCES technical.clients_location (id_location) MATCH SIMPLE
+    ON UPDATE NO ACTION
+    ON DELETE NO ACTION;
+CREATE INDEX IF NOT EXISTS fki_location_inspection_fkey
+    ON internal_management.inspection_technical(ubication_id);
+
+
+------------------------------------------------------------------------------------------------------------------------------
+
+CREATE TABLE internal_management.sale_quotation
+(
+    id_quote integer NOT NULL,
+    inspection_id integer,
+    client_company integer,
+    iva numeric(15, 2),
+    iva_rate numeric(15, 2),
+    subtotal numeric(15, 2),
+    total numeric(15, 2),
+    quote_number text,
+    delivery_time text,
+    payment_terms text,
+    validity_days integer,
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    updated_by text,
+    PRIMARY KEY (id_quote),
+    CONSTRAINT client_company_quote_fkey FOREIGN KEY (client_company)
+        REFERENCES technical.client_companies (id_company) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT inspection_quote_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.sale_quotation_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.sale_quotation_id_seq
+    OWNED BY internal_management.sale_quotation.id_quote;
+
+ALTER SEQUENCE internal_management.sale_quotation_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation
+    ALTER COLUMN id_quote SET DEFAULT nextval('internal_management.sale_quotation_id_seq'::regclass);
+
+
+---------------------------------------------------------------------------------------------------------------------------------
+
+CREATE TABLE internal_management.sale_quotation_item
+(
+    id_item integer NOT NULL,
+    sale_quote_id integer,
+    material_id integer,
+    item_number integer,
+    is_labor boolean,
+    is_bundle boolean,
+    base_price numeric(15, 2),
+    profit_margin numeric(15, 2),
+    profit_margin_dollar numeric(15, 2),
+    quantity numeric(15, 2),
+    total numeric(15, 2),
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    updated_by text,
+    PRIMARY KEY (id_item),
+    CONSTRAINT sale_quote_fkey FOREIGN KEY (sale_quote_id)
+        REFERENCES internal_management.sale_quotation (id_quote) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_quote_fkey FOREIGN KEY (material_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation_item
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.sales_quotation_item_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.sales_quotation_item_id_seq
+    OWNED BY internal_management.sale_quotation_item.id_item;
+
+ALTER SEQUENCE internal_management.sales_quotation_item_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation_item
+    ALTER COLUMN id_item SET DEFAULT nextval('internal_management.sales_quotation_item_id_seq'::regclass);
+
+
+----------------------------------------------------------------------------------------------------------------------------
+
+CREATE TABLE internal_management.sale_additional_materials
+(
+    id_extra integer NOT NULL,
+    sale_quote_id integer,
+    material_id integer,
+    base_price numeric(15, 2),
+    profit_margin numeric(15, 2),
+    profit_margin_dollar numeric(15, 2),
+    quantity numeric(15, 2),
+    total numeric(15, 2),
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    updated_by text,
+    PRIMARY KEY (id_extra),
+    CONSTRAINT sale_quote_fkey FOREIGN KEY (sale_quote_id)
+        REFERENCES internal_management.sale_quotation (id_quote) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_fkey FOREIGN KEY (material_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.sale_additional_materials
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.sale_additional_materials_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.sale_additional_materials_id_seq
+    OWNED BY internal_management.sale_additional_materials.id_extra;
+
+ALTER SEQUENCE internal_management.sale_additional_materials_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.sale_additional_materials
+    ALTER COLUMN id_extra SET DEFAULT nextval('internal_management.sale_additional_materials_id_seq'::regclass);
+
+
+--------------------------------------------------------------------------------------------------------------------------------
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation_item
+    ADD COLUMN description text;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation_item
+    ADD COLUMN model text;
+
+ALTER TABLE IF EXISTS internal_management.sale_quotation_item
+    ADD COLUMN is_new boolean;
+
+ALTER TABLE IF EXISTS internal_management.sale_additional_materials
+    ADD COLUMN quotation_item_id integer;
+
+ALTER TABLE IF EXISTS internal_management.sale_additional_materials
+    ADD CONSTRAINT quotation_item_fkey FOREIGN KEY (quotation_item_id)
+        REFERENCES internal_management.sale_quotation_item (id_item) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION;

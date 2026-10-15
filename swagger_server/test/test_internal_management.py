@@ -81,7 +81,6 @@ class FakeReadRepository:
             responsible_next_action="vendedor",
             requires_technical=True,
             requires_material=True,
-            scheduled_start_date=datetime(2026, 2, 2),
             contract_received=False,
             date_finish=None,
             reason_loss=None,

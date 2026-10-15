@@ -3,6 +3,11 @@ from dataclasses import dataclass
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.repository.internal_management_repository import InternalManagementRepository
+from swagger_server.utils.inspection_documents import (
+    document_mimetype,
+    document_name,
+    resolve_document_path,
+)
 
 @dataclass
 class PaginationParams:
@@ -19,11 +24,15 @@ class InternalManagementUseCase:
             internal_management_repository or InternalManagementRepository()
         )
 
-    def post_ticket_technical(self, body, internal, external):
-        return self.internal_management_repository.post_ticket_technical(body, internal, external)
+    def post_ticket_technical(self, body, internal, external, files=None):
+        return self.internal_management_repository.post_ticket_technical(
+            body, internal, external, files=files
+        )
 
-    def post_inspection_technical(self, body, internal, external):
-        return self.internal_management_repository.post_inspection_technical(body, internal, external)
+    def post_inspection_technical(self, body, internal, external, files=None):
+        return self.internal_management_repository.post_inspection_technical(
+            body, internal, external, files=files
+        )
 
     def update_inspection_technical(self, id_inspection, body, internal, external):
         return self.internal_management_repository.update_inspection_technical(
@@ -109,23 +118,46 @@ class InternalManagementUseCase:
                 "commercial_status_id": commercial_status_id,
                 "commercial_status": commercial_status,
                 "technical_id": technical_id,
+                "technical_id": technical_id,
+                "identity": identity,
+                "company_name": company_name,
+                "client_company_id": client_company_id,
                 # Comercial aprobado (status_id 5) y sin proyecto: se puede crear el proyecto
                 "ready_for_project": commercial_status_id == 5 and project_id is None,
+                "documents": [
+                    {
+                        "id_document": document.id_document,
+                        "document_path": document.document_path,
+                        # Los registros previos a name_document se resuelven desde la ruta
+                        "document_name": document.name_document or document_name(document.document_path),
+                        "type": document.type_document,
+                        "created_at": document.created_at,
+                    }
+                    for document in documents
+                ],
             }
-            for inspection, project_id, commercial_status_id, commercial_status, technical_id in rows
+            for inspection, project_id, commercial_status_id, commercial_status, technical_id, identity, company_name, client_company_id, documents in rows
         ]
 
-    def parse_pagination(self, params: dict) -> PaginationParams:
-        try:
-            page = max(1, int(params.get("page", 1)))
-            page_size = min(100, max(1, int(params.get("page_size", 20))))  # máximo 100
-            return PaginationParams(page=page, page_size=page_size)
-        except (ValueError, TypeError):
-            return PaginationParams()
+    def get_inspection_document(self, id_document, internal, external):
+        """Retorna la ruta absoluta del archivo, su nombre original y su tipo MIME."""
+        document = self.internal_management_repository.get_inspection_document(
+            id_document,
+            internal,
+            external,
+        )
+        name = document.name_document or document_name(document.document_path)
+        return (
+            resolve_document_path(document.document_path),
+            name,
+            document.type_document or document_mimetype(name),
+        )
 
 
-    def post_ticket_commercial(self, body, internal, external):
-        return self.internal_management_repository.post_ticket_commercial(body, internal, external)
+    def post_ticket_commercial(self, body, internal, external, files=None):
+        return self.internal_management_repository.post_ticket_commercial(
+            body, internal, external, files=files
+        )
 
     def update_ticket_commercial(self, body, internal, external):
         return self.internal_management_repository.update_ticket_commercial(
@@ -208,11 +240,12 @@ class InternalManagementUseCase:
     def get_commercial_origin(self, internal, external):
         return self.internal_management_repository.get_commercial_origin(internal, external)
 
-    def post_ticket_financial(self, body, internal, external):
+    def post_ticket_financial(self, body, internal, external, files=None):
         return self.internal_management_repository.post_ticket_financial(
             body,
             internal,
             external,
+            files=files,
         )
 
     def update_ticket_financial(self, body, internal, external):
@@ -299,7 +332,6 @@ class InternalManagementUseCase:
                 "responsible_next_action": management.responsible_next_action,
                 "requires_technical": management.requires_technical,
                 "requires_material": management.requires_material,
-                "scheduled_start_date": management.scheduled_start_date,
                 "contract_received": management.contract_received,
                 "date_finish": management.date_finish,
                 "reason_loss": management.reason_loss,
@@ -310,10 +342,61 @@ class InternalManagementUseCase:
                 "updated_at": management.updated_at,
                 "created_by": management.created_by,
                 "updated_by": management.updated_by,
-                "last_followup_at": last_followup_at
+                "last_followup_at": last_followup_at,
+                "sale_quotation": self._serialize_sale_quotation(sale_quotation),
             }
-            for management, ticket, origin_name, type_solution_name, status_name, last_followup_at in rows
+            for management, ticket, origin_name, type_solution_name, status_name, last_followup_at, sale_quotation in rows
         ]
+
+    @staticmethod
+    def _amount(value):
+        # Numeric llega como Decimal y Flask lo serializaría como texto
+        return float(value) if value is not None else None
+
+    def _serialize_sale_quotation(self, sale_quotation):
+        if sale_quotation is None:
+            return None
+
+        quotation, items, components = sale_quotation
+        components_by_item = {}
+        for component in components:
+            components_by_item.setdefault(component.quotation_item_id, []).append(component)
+
+        def prices(record):
+            return {
+                "material_id": record.material_id,
+                "quantity": self._amount(record.quantity),
+                "base_price": self._amount(record.base_price),
+                "profit_margin": self._amount(record.profit_margin),
+                "profit_margin_dollar": self._amount(record.profit_margin_dollar),
+                "total": self._amount(record.total),
+            }
+
+        return {
+            "id_quote": quotation.id_quote,
+            "client_company": quotation.client_company,
+            "items": [
+                {
+                    "id_item": item.id_item,
+                    "item": item.item_number,
+                    **prices(item),
+                    "is_bundle": bool(item.is_bundle),
+                    "is_labor": bool(item.is_labor),
+                    "is_new": bool(item.is_new),
+                    "model": item.model,
+                    "description": item.description,
+                    "components": [
+                        prices(component)
+                        for component in components_by_item.get(item.id_item, [])
+                    ],
+                }
+                for item in items
+            ],
+            "subtotal": self._amount(quotation.subtotal),
+            "iva_rate": self._amount(quotation.iva_rate),
+            "iva": self._amount(quotation.iva),
+            "total": self._amount(quotation.total),
+        }
 
     def get_history_area(self, id_inspection: int, internal, external) -> None:
         rows = self.internal_management_repository.get_history_area(id_inspection, internal, external)
@@ -420,7 +503,7 @@ class InternalManagementUseCase:
             counts["invoices_collected"],
         )))
         finished_total = sum(finished.values())
-        quotations_total = counts["quotations_approved"] + counts["quotations_rejected"]
+        quotations_total = counts["quotations_approved"] + counts["quotations_rejected"] + counts["quotations_pending"]
         invoices_total = counts["invoices_issued"] + counts["invoices_collected"]
 
         return {
@@ -448,6 +531,10 @@ class InternalManagementUseCase:
                     "count": counts["quotations_rejected"],
                     "percentage": self._percentage(counts["quotations_rejected"], quotations_total),
                 },
+                "pending": {
+                    "count": counts["quotations_pending"],
+                    "percentage": self._percentage(counts["quotations_pending"], quotations_total),
+                }
             },
             "invoices": {
                 "issued": counts["invoices_issued"],

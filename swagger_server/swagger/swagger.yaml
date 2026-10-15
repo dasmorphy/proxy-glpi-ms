@@ -208,6 +208,62 @@ paths:
         "502":
           description: No fue posible consumir GLPI
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /inspection-documents/{id_document}:
+    get:
+      tags:
+      - Inspection
+      summary: Descarga un documento adjunto de una inspección
+      description: >-
+        Devuelve el archivo binario registrado en internal_management.inspection_documents.
+        Con inline=true se sirve para visualizarlo en el navegador (pdf, imágenes);
+        por defecto se descarga como adjunto.
+      operationId: download_inspection_document
+      parameters:
+      - name: id_document
+        in: path
+        required: true
+        schema:
+          type: integer
+          example: 1
+      - name: inline
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: externalTransactionId
+        in: header
+        required: true
+        schema:
+          type: string
+          example: "fcea920f7412b5da7be0cf42b8c93759"
+      - name: channel
+        in: header
+        required: true
+        schema:
+          type: string
+          example: "TLSG_WEB"
+      responses:
+        "200":
+          description: Archivo del documento
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Documento no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /type-solution:
     get:
       tags:
@@ -564,77 +620,20 @@ paths:
       operationId: post_inspection_technical
       requestBody:
         content:
-          application/json:
+          multipart/form-data:
             schema:
+              type: object
               properties:
                 data:
-                  type: object
-                  properties:
-                    inspection_id:
-                      type: integer
-                      example: 1
-                    client_id:
-                      type: integer
-                      example: 1
-                    ubication_id:
-                      type: integer
-                      example: 1
-                    client_name:
-                      type: string
-                      example: TELEARGEG
-                    ubication_name:
-                      type: string
-                      example: GUAYAS
-                    contact:
-                      type: string
-                      example: Daniel
-                    case_type:
-                      type: string
-                      example: Cotización
-                    priority:
-                      type: string
-                      example: Alta
-                    responsible_id:
-                      type: string
-                      format: uuid
-                      example: fcea920f7412b5da7be0cf42b8c93759
-                    responsible_name:
-                      type: string
-                      example: Daniel
-                    management_status:
-                      type: string
-                      example: En proceso
-                    title_ticket:
-                      type: string
-                      example: Propuesta zentinel
-                    next_action:
-                      type: string
-                      example: Cotización
-                    commitment_date:
-                      type: string
-                      format: date-time
-                      example: 2024-06-01T12:00:00Z
-                    requires_material:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    requires_monitoring:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    observations:
-                      type: string
-                      nullable: true
-                      example: Observaciones del ticket
-                    status:
-                      type: string
-                      example: Listo para cotizar
-                    survey_status:
-                      type: string
-                      example: En proceso
-                    user:
-                      type: string
-                      example: dmales
+                  type: string
+                  description: >-
+                    JSON en texto con los campos de la inspección: client_id, ubication_id,
+                    client_name, ubication_name, contact, case_type, priority, responsible_id,
+                    responsible_name, management_status, title_ticket, commitment_date,
+                    status, user.
+                  example: '{"client_id": 1, "ubication_id": 1, "client_name": "TELEARGEG", "ubication_name": "GUAYAS", "contact": "Daniel", "case_type": "Cotización", "priority": "Alta", "responsible_id": "fcea920f-7412-b5da-7be0-cf42b8c93759", "responsible_name": "Daniel", "management_status": "En proceso", "title_ticket": "Propuesta zentinel", "commitment_date": "2024-06-01T12:00:00Z", "status": "En proceso", "user": "dmales"}'
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
                   type: string
                   example: TLSG_WEB
@@ -926,41 +925,18 @@ paths:
       operationId: post_ticket_technical
       requestBody:
         content:
-          application/json:
+          multipart/form-data:
             schema:
+              type: object
               properties:
                 data:
-                  type: object
-                  properties:
-                    inspection_id:
-                      type: integer
-                      example: 1
-                    description:
-                      type: string
-                      example: "N/A"
-                    materials:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          material_id:
-                            nullable: true
-                            type: integer
-                            example: 1
-                          quantity:
-                            type: integer
-                            example: 1
-                          other:
-                            nullable: true
-                            type: string
-                            example: "N/A"
-                          material_description:
-                            nullable: true
-                            type: string
-                            example: "N/A"
-                    user:
-                      type: string
-                      example: dmales
+                  type: string
+                  description: >-
+                    JSON en texto con inspection_id, description, user y materials
+                    (lista de objetos con material_id, quantity, other, material_description).
+                  example: '{"inspection_id": 1, "description": "N/A", "materials": [{"material_id": 1, "quantity": 1, "other": null, "material_description": "N/A"}], "user": "dmales"}'
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
                   type: string
                   example: TLSG_WEB
@@ -1153,7 +1129,7 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "inspection_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                  description: "inspection_id identifica el ticket GLPI; los demás campos del POST son opcionales. Si viene sale_quotation, los items de la proforma de la inspección se reemplazan completos."
                 channel:
                   type: string
                 externalTransactionId:
@@ -1174,86 +1150,24 @@ paths:
       operationId: post_ticket_commercial
       requestBody:
         content:
-          application/json:
+          multipart/form-data:
             schema:
+              type: object
               properties:
                 data:
-                  type: object
-                  properties:
-                    inspection_id:
-                      type: integer
-                      nullable: true
-                      example: 1
-                    assigned_user:
-                      nullable: true
-                      type: string
-                      example: dmales
-                    origin_id:
-                      nullable: true
-                      type: integer
-                      example: 1
-                    type_solution_id:
-                      nullable: true
-                      type: integer
-                      example: 1
-                    quoted_amount:
-                      nullable: true
-                      example: 212.30
-                    probability_closing:
-                      nullable: true
-                      type: integer
-                      example: 50
-                    closing_date:
-                      nullable: true
-                      type: string
-                      format: date-time
-                      example: "2025-01-21T00:00:00"
-                    next_action:
-                      nullable: true
-                      type: string
-                      example: En proceso
-                    responsible_next_action:
-                      nullable: true
-                      type: string
-                      example: Comercial
-                    requires_technical:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    requires_material:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    scheduled_start_date:
-                      type: string
-                      nullable: true
-                      format: date-time
-                      example: "2025-01-21T00:00:00"
-                    contract_received:
-                      type: boolean
-                      nullable: true
-                      example: true
-                    date_finish:
-                      type: string
-                      format: date-time
-                      nullable: true
-                      example: "2025-02-21T00:00:00"
-                    reason_loss:
-                      nullable: true
-                      type: string
-                      example: "M/A"
-                    observations:
-                      type: string
-                      nullable: true
-                      example: Observaciones del ticket
-                    status_id:
-                      nullable: true
-                      type: integer
-                      example: 1
-                    user:
-                      nullable: true
-                      type: string
-                      example: dmales
+                  type: string
+                  description: >-
+                    JSON en texto con inspection_id, assigned_user, origin_id, type_solution_id,
+                    quoted_amount, probability_closing, closing_date, next_action,
+                    responsible_next_action, requires_technical, requires_material,
+                    contract_received, date_finish, reason_loss,
+                    observations, status_id, user y opcionalmente sale_quotation
+                    (proforma con client_company, items, subtotal, iva_rate, iva y total;
+                    los components de un item con is_bundle=true se guardan como
+                    materiales adicionales; los items con is_new o is_labor envían model y description).
+                  example: '{"inspection_id": 1, "assigned_user": "dmales", "origin_id": 1, "type_solution_id": 1, "quoted_amount": 212.30, "probability_closing": 50, "closing_date": "2025-01-21T00:00:00", "next_action": "En proceso", "responsible_next_action": "Comercial", "requires_technical": true, "requires_material": true, "contract_received": true, "date_finish": "2025-02-21T00:00:00", "reason_loss": null, "observations": "Observaciones del ticket", "status_id": 1, "user": "dmales", "sale_quotation": {"client_company": 1, "items": [{"item": 1, "material_id": 152, "quantity": 20, "base_price": 1.09, "profit_margin": 0.3, "profit_margin_dollar": 0.33, "price": 1.42, "total": 28.4, "is_bundle": false, "is_labor": false, "components": []}, {"item": 2, "material_id": null, "quantity": 1, "base_price": 158.48, "profit_margin": 0.259, "profit_margin_dollar": 41.04, "price": 199.52, "total": 199.52, "is_bundle": true, "is_labor": false, "components": [{"material_id": 107, "quantity": 1, "base_price": 93.48, "profit_margin": 0.3, "profit_margin_dollar": 28.04, "total": 121.52}]}], "subtotal": 227.92, "iva_rate": 0.15, "iva": 34.19, "total": 262.11}}'
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
                   type: string
                   example: TLSG_WEB
@@ -1443,56 +1357,19 @@ paths:
       operationId: post_ticket_financial
       requestBody:
         content:
-          application/json:
+          multipart/form-data:
             schema:
+              type: object
               properties:
                 data:
-                  type: object
-                  properties:
-                    inspection_id:
-                      type: integer
-                      nullable: true
-                      example: 1
-                    type_management:
-                      nullable: true
-                      type: string
-                      example: Factura
-                    amount_pending:
-                      nullable: true
-                      type: number
-                      format: double
-                      example: 12.5
-                    amount_paid:
-                      nullable: true
-                      type: number
-                      format: double
-                      example: 12.5
-                    invoice_price:
-                      nullable: true
-                      type: number
-                      format: double
-                      example: 12.5
-                    number_document:
-                      nullable: true
-                      type: string
-                      example: "123456"
-                    date_document:
-                      type: string
-                      format: date-time
-                      nullable: true
-                      example: "2025-02-21T00:00:00"
-                    observations:
-                      type: string
-                      nullable: true
-                      example: Observaciones del ticket
-                    status:
-                      nullable: true
-                      type: string
-                      example: Cobrada
-                    user:
-                      nullable: true
-                      type: string
-                      example: dmales
+                  type: string
+                  description: >-
+                    JSON en texto con inspection_id, type_management, amount_pending,
+                    amount_paid, invoice_price, number_document, date_document,
+                    observations, status y user.
+                  example: '{"inspection_id": 1, "type_management": "Factura", "amount_pending": 12.5, "amount_paid": 12.5, "invoice_price": 12.5, "number_document": "123456", "date_document": "2025-02-21T00:00:00", "observations": "Observaciones del ticket", "status": "Cobrada", "user": "dmales"}'
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
                   type: string
                   example: TLSG_WEB
@@ -2004,6 +1881,15 @@ paths:
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
 components:
   schemas:
+    InspectionDocumentFiles:
+      type: array
+      description: >-
+        Archivos opcionales de la inspección (pdf, imágenes, office, csv, txt).
+        Se guardan en la carpeta inspection-documents y se registran en
+        internal_management.inspection_documents.
+      items:
+        type: string
+        format: binary
     RequestPostLogbookEntry:
       properties:
         data:

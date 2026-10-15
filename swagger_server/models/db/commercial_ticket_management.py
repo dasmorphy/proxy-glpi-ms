@@ -41,7 +41,7 @@ class CommercialTicketManagement(Base):
     responsible_next_action = Column(Text)
     requires_technical = Column(Boolean)
     requires_material = Column(Boolean)
-    scheduled_start_date = Column(DateTime)
+    # scheduled_start_date = Column(DateTime)
     contract_received = Column(Boolean)
     date_finish = Column(DateTime)
     reason_loss = Column(Text)

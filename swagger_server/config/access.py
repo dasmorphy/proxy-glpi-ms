@@ -36,6 +36,9 @@ def access():
             "USER_TOKEN_SESSION": os.getenv("USER_TOKEN_SESSION"),
             "TIMEOUT": float(os.getenv("GLPI_TIMEOUT", "30")),
         },
+        "STORAGE": {
+            "INSPECTION_DOCUMENTS": os.getenv("INSPECTION_DOCUMENTS_PATH", "inspection-documents"),
+        },
     }
 
 
