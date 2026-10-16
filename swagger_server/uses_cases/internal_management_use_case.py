@@ -123,6 +123,10 @@ class InternalManagementUseCase:
                 "identity": identity,
                 "company_name": company_name,
                 "client_company_id": client_company_id,
+                # PDF de la proforma: /sale-quotation/{sale_quote_id}/pdf
+                "sale_quote_id": sale_quote_id,
+                # Total de la proforma: valor facturado de la gestión financiera
+                "sale_quote_total": sale_quote_total,
                 # Comercial aprobado (status_id 5) y sin proyecto: se puede crear el proyecto
                 "ready_for_project": commercial_status_id == 5 and project_id is None,
                 "documents": [
@@ -137,7 +141,7 @@ class InternalManagementUseCase:
                     for document in documents
                 ],
             }
-            for inspection, project_id, commercial_status_id, commercial_status, technical_id, identity, company_name, client_company_id, documents in rows
+            for inspection, project_id, commercial_status_id, commercial_status, technical_id, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, documents in rows
         ]
 
     def get_inspection_document(self, id_document, internal, external):
@@ -650,6 +654,8 @@ class InternalManagementUseCase:
                     "id_inspection": row.id_inspection,
                     "title_ticket": row.title_ticket,
                     "management_area": row.management_area,
+                    "finished": row.finished_at is not None,
+                    "finished_at": row.finished_at,
                     "areas": [],
                 },
             )

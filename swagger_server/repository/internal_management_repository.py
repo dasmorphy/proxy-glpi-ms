@@ -901,15 +901,19 @@ class InternalManagementRepository:
 
                 ticket.management_area = "Financiera"
 
+                invoice_price, amount_pending = self._invoice_from_quotation(
+                    session, ticket.id_inspection, body
+                )
+
                 if body.get("status") == "Cobrada":
                     ticket.status = "Finalizado"
 
                 financial_management = FinancialTicketManagement(
                     ticket_id=ticket.id_inspection,
                     type_management=body.get("type_management"),
-                    amount_pending=body.get("amount_pending"),
+                    amount_pending=amount_pending,
                     amount_paid=body.get("amount_paid"),
-                    invoice_price=body.get("invoice_price"),
+                    invoice_price=invoice_price,
                     observations=body.get("observations"),
                     status=body.get("status"),
                     date_document=body.get("date_document"),
@@ -1203,14 +1207,19 @@ class InternalManagementRepository:
                     body,
                     {
                         "type_management": "type_management",
-                        "amount_pending": "amount_pending",
                         "amount_paid": "amount_paid",
-                        "invoice_price": "invoice_price",
                         "observations": "observations",
                         "status": "status",
                         "date_document": "date_document",
                         "number_document": "number_document",
                     },
+                )
+                management.invoice_price, management.amount_pending = (
+                    self._invoice_from_quotation(
+                        session,
+                        ticket.id_inspection,
+                        {"amount_paid": management.amount_paid},
+                    )
                 )
                 self._set_updated_by(body, management)
 
@@ -1476,6 +1485,22 @@ class InternalManagementRepository:
                     .scalar_subquery()
                 )
 
+                # Proforma de la inspección (una por inspección; por si acaso, la última)
+                sale_quote_id = (
+                    select(SaleQuotation.id_quote)
+                    .where(SaleQuotation.inspection_id == InspectionTechnical.id_inspection)
+                    .order_by(SaleQuotation.id_quote.desc())
+                    .limit(1)
+                    .correlate(InspectionTechnical)
+                    .scalar_subquery()
+                )
+
+                sale_quote_total = (
+                    select(SaleQuotation.total)
+                    .where(SaleQuotation.id_quote == sale_quote_id)
+                    .scalar_subquery()
+                )
+
                 stmt = select(
                     InspectionTechnical,
                     TaskTechnical.id_task.label("project_id"),
@@ -1485,6 +1510,8 @@ class InternalManagementRepository:
                     ClientCompany.identity.label("identity"),
                     ClientCompany.company_name.label("company_name"),
                     ClientCompany.id_company.label("client_company_id"),
+                    sale_quote_id.label("sale_quote_id"),
+                    sale_quote_total.label("sale_quote_total"),
                 ).outerjoin(
                     TaskTechnical,
                     TaskTechnical.inspection_id == InspectionTechnical.id_inspection
@@ -1702,13 +1729,29 @@ class InternalManagementRepository:
 
         El tiempo en un área es la diferencia entre el registro del historial que
         la inicia y el siguiente registro del mismo ticket (LEAD). Si no hay
-        siguiente, el ticket sigue en esa área y se mide hasta el momento actual.
+        siguiente, el ticket sigue en esa área y se mide hasta el momento actual,
+        salvo que la inspección esté finalizada (tiene un documento financiero
+        Cobrado): en ese caso el área se cierra en la fecha del cobro.
         """
         with self.db_telearseg.session_factory() as session:
             try:
-                left_at = func.lead(HistoryAreaTicket.created_at).over(
+                finished = (
+                    select(
+                        FinancialTicketManagement.ticket_id,
+                        func.max(FinancialTicketManagement.updated_at).label("finished_at"),
+                    )
+                    .where(FinancialTicketManagement.status == "Cobrada")
+                    .group_by(FinancialTicketManagement.ticket_id)
+                    .subquery()
+                )
+                next_entered_at = func.lead(HistoryAreaTicket.created_at).over(
                     partition_by=HistoryAreaTicket.ticket_id,
                     order_by=(HistoryAreaTicket.created_at, HistoryAreaTicket.id_history),
+                )
+                # greatest evita tiempos negativos si el cobro es anterior al último cambio de área
+                left_at = func.coalesce(
+                    next_entered_at,
+                    func.greatest(finished.c.finished_at, HistoryAreaTicket.created_at),
                 )
                 intervals = (
                     select(
@@ -1716,11 +1759,13 @@ class InternalManagementRepository:
                         HistoryAreaTicket.current_area.label("area"),
                         HistoryAreaTicket.created_at.label("entered_at"),
                         left_at.label("left_at"),
+                        finished.c.finished_at,
                     )
                     .join(
                         InspectionTechnical,
                         InspectionTechnical.id_inspection == HistoryAreaTicket.ticket_id,
                     )
+                    .outerjoin(finished, finished.c.ticket_id == HistoryAreaTicket.ticket_id)
                     .where(*self._inspection_date_conditions(filters))
                     .subquery()
                 )
@@ -1748,6 +1793,7 @@ class InternalManagementRepository:
                         intervals.c.area,
                         func.sum(seconds).label("seconds"),
                         func.bool_or(intervals.c.left_at.is_(None)).label("in_progress"),
+                        func.max(intervals.c.finished_at).label("finished_at"),
                     )
                     .join(
                         InspectionTechnical,
@@ -1979,6 +2025,41 @@ class InternalManagementRepository:
         if quotation_item_id is not None:
             return ("item", quotation_item_id)
         return ("additional", additional_material_id)
+
+    def _invoice_from_quotation(self, session, inspection_id, body):
+        """
+        El valor facturado es siempre el total de la proforma aprobada de la
+        inspección (una por inspección); no se acepta el que envía el cliente.
+        Retorna (invoice_price, amount_pending).
+        """
+        commercial = self._get_latest_management(
+            session,
+            CommercialTicketManagement,
+            inspection_id,
+            CommercialTicketManagement.id_management_commercial,
+        )
+        if commercial is None or commercial.status_id != self.COMMERCIAL_STATUS_APPROVED:
+            raise CustomAPIException(
+                "La gestión comercial de la inspección no está aprobada", 400
+            )
+
+        quotation = self._get_latest_quotation(session, inspection_id)
+        if quotation is None or quotation.total is None:
+            raise CustomAPIException(
+                "La inspección no tiene una proforma registrada", 400
+            )
+
+        invoice_price = Decimal(str(quotation.total))
+        amount_paid = body.get("amount_paid")
+        if amount_paid in (None, ""):
+            return invoice_price, None
+
+        amount_paid = Decimal(str(amount_paid))
+        if amount_paid < 0 or amount_paid > invoice_price:
+            raise CustomAPIException(
+                "El valor abonado debe estar entre 0 y el valor facturado", 400
+            )
+        return invoice_price, invoice_price - amount_paid
 
     @staticmethod
     def _get_latest_quotation(session, inspection_id, lock=False):

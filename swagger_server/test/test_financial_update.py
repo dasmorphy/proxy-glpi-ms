@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 
@@ -8,11 +9,16 @@ from swagger_server.repository.internal_management_repository import (
 
 
 class FakeSession:
-    """Primer execute: la inspección; segundo: la gestión financiera."""
+    """Responde según la tabla consultada: inspección, gestión financiera, comercial o proforma."""
 
-    def __init__(self, management):
+    def __init__(self, management, commercial_status=5, quotation_total=Decimal("862.41")):
         self.inspection = SimpleNamespace(id_inspection=7, status="En proceso")
         self.management = management
+        self.commercial = SimpleNamespace(status_id=commercial_status)
+        self.quotation = (
+            SimpleNamespace(id_quote=30, total=quotation_total)
+            if quotation_total is not None else None
+        )
         self.statements = []
         self.committed = False
         self.rolled_back = False
@@ -24,8 +30,16 @@ class FakeSession:
         return False
 
     def execute(self, statement):
-        self.statements.append(str(statement))
-        value = self.inspection if len(self.statements) == 1 else self.management
+        sql = str(statement)
+        self.statements.append(sql)
+        if "FROM internal_management.inspection_technical" in sql:
+            value = self.inspection
+        elif "FROM internal_management.financial_ticket_management" in sql:
+            value = self.management
+        elif "FROM internal_management.commercial_ticket_management" in sql:
+            value = self.commercial
+        else:
+            value = self.quotation
         return SimpleNamespace(
             scalar_one_or_none=lambda: value,
             scalars=lambda: SimpleNamespace(first=lambda: value),
@@ -67,6 +81,8 @@ class TestUpdateTicketFinancial(unittest.TestCase):
         self.assertIn("id_management_financial", session.statements[1])
         self.assertEqual("002", management.number_document)
         self.assertEqual(50, management.amount_paid)
+        self.assertEqual(Decimal("862.41"), management.invoice_price)
+        self.assertEqual(Decimal("812.41"), management.amount_pending)
         self.assertEqual("Emitida", management.status)
         self.assertEqual("editor", management.updated_by)
         self.assertEqual("En proceso", session.inspection.status)
@@ -87,6 +103,43 @@ class TestUpdateTicketFinancial(unittest.TestCase):
             update(session, {"inspection_id": 7, "id_management_financial": 99})
 
         self.assertEqual(404, context.exception.status_code)
+        self.assertFalse(session.committed)
+
+    def test_ignores_the_invoice_price_sent_by_the_client(self):
+        management = financial()
+        session = FakeSession(management)
+
+        update(session, {"inspection_id": 7, "id_management_financial": 13,
+                         "invoice_price": 1, "amount_pending": 1})
+
+        self.assertEqual(Decimal("862.41"), management.invoice_price)
+        self.assertIsNone(management.amount_pending)
+
+    def test_rejects_when_the_commercial_management_is_not_approved(self):
+        session = FakeSession(financial(), commercial_status=7)
+
+        with self.assertRaises(CustomAPIException) as context:
+            update(session, {"inspection_id": 7, "id_management_financial": 13})
+
+        self.assertEqual(400, context.exception.status_code)
+        self.assertFalse(session.committed)
+
+    def test_rejects_when_there_is_no_quotation(self):
+        session = FakeSession(financial(), quotation_total=None)
+
+        with self.assertRaises(CustomAPIException):
+            update(session, {"inspection_id": 7, "id_management_financial": 13})
+
+        self.assertFalse(session.committed)
+
+    def test_rejects_paid_amount_greater_than_invoice(self):
+        session = FakeSession(financial())
+
+        with self.assertRaises(CustomAPIException) as context:
+            update(session, {"inspection_id": 7, "id_management_financial": 13,
+                             "amount_paid": 900})
+
+        self.assertEqual(400, context.exception.status_code)
         self.assertFalse(session.committed)
 
 

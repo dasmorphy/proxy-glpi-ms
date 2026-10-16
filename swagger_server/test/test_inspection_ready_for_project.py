@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 
@@ -71,7 +72,7 @@ def build_repository(session):
 class TestInspectionReadyForProjectUseCase(unittest.TestCase):
     def test_serializes_commercial_status_and_ready_flag(self):
         repository = FakeInspectionRepository([
-            (inspection(id_inspection=1), None, 5, "Aprobada", 11, "0991234567001", "Empresa SA", 9, [
+            (inspection(id_inspection=1), None, 5, "Aprobada", 11, "0991234567001", "Empresa SA", 9, 30, Decimal("862.41"), [
                 SimpleNamespace(
                     id_document=3,
                     document_path="inspection-documents/1_a1b2c3d4e5f6_informe_final.pdf",
@@ -80,9 +81,9 @@ class TestInspectionReadyForProjectUseCase(unittest.TestCase):
                     created_at=datetime(2026, 1, 3),
                 ),
             ]),
-            (inspection(id_inspection=2), 40, 5, "Aprobada", 12, None, None, None, []),
-            (inspection(id_inspection=3), None, 6, "Rechazada", None, None, None, None, []),
-            (inspection(id_inspection=4), None, None, None, None, None, None, None, []),
+            (inspection(id_inspection=2), 40, 5, "Aprobada", 12, None, None, None, None, None, []),
+            (inspection(id_inspection=3), None, 6, "Rechazada", None, None, None, None, None, None, []),
+            (inspection(id_inspection=4), None, None, None, None, None, None, None, None, None, []),
         ])
         use_case = InternalManagementUseCase(repository)
 
@@ -103,6 +104,9 @@ class TestInspectionReadyForProjectUseCase(unittest.TestCase):
         self.assertIsNone(result[3]["technical_id"])
         self.assertEqual("0991234567001", result[0]["identity"])
         self.assertIsNone(result[1]["identity"])
+        self.assertEqual(30, result[0]["sale_quote_id"])
+        self.assertIsNone(result[1]["sale_quote_id"])
+        self.assertEqual(Decimal("862.41"), result[0]["sale_quote_total"])
         self.assertEqual(
             [{
                 "id_document": 3,
@@ -129,6 +133,8 @@ class TestInspectionReadyForProjectRepository(unittest.TestCase):
         self.assertIn("technical_id", sql)
         self.assertIn("client_companies.identity", sql)
         self.assertIn("client_companies.id_company AS client_company_id", sql)
+        self.assertIn("AS sale_quote_id", sql)
+        self.assertIn("AS sale_quote_total", sql)
         self.assertIn("client_companies.id_company = technical.clients.client_company_id", sql)
         self.assertIn("technical.clients.id_client = internal_management.inspection_technical.client_id", sql)
 
@@ -159,8 +165,8 @@ class TestInspectionReadyForProjectRepository(unittest.TestCase):
                 self.statements.append(statement)
                 if len(self.statements) == 1:
                     return SimpleNamespace(all=lambda: [
-                        (first, None, None, None, None, None, None, None),
-                        (second, None, None, None, None, None, None, None),
+                        (first, None, None, None, None, None, None, None, None, None),
+                        (second, None, None, None, None, None, None, None, None, None),
                     ])
                 return SimpleNamespace(
                     scalars=lambda: SimpleNamespace(all=lambda: documents)
@@ -170,8 +176,8 @@ class TestInspectionReadyForProjectRepository(unittest.TestCase):
         rows = build_repository(session).get_inspection_technical({}, "internal", "external")
 
         self.assertEqual(2, len(rows))
-        self.assertEqual(documents, rows[0][8])
-        self.assertEqual([], rows[1][8])
+        self.assertEqual(documents, rows[0][10])
+        self.assertEqual([], rows[1][10])
         self.assertIn("inspection_documents", str(session.statements[1]))
         self.assertNotIn("inspection_documents", str(session.statements[0]))
 

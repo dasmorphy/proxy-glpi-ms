@@ -33,9 +33,18 @@ class FakeSession:
         return False
 
     def execute(self, statement):
+        sql = str(statement)
+        # La gestión financiera toma el valor facturado de la proforma aprobada
+        if "FROM internal_management.commercial_ticket_management" in sql:
+            first = SimpleNamespace(status_id=5)
+        elif "FROM internal_management.sale_quotation" in sql:
+            first = SimpleNamespace(id_quote=30, total=100)
+        else:
+            first = self.inspection
         return SimpleNamespace(
             scalar_one_or_none=lambda: self.inspection,
             scalar=lambda: False,
+            scalars=lambda: SimpleNamespace(first=lambda: first),
         )
 
     def add(self, record):
