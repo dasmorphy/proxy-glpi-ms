@@ -8,6 +8,7 @@ from swagger_server.utils.inspection_documents import (
     document_name,
     resolve_document_path,
 )
+from swagger_server.utils.proforma_pdf import format_quantity, generate_proforma_pdf
 
 @dataclass
 class PaginationParams:
@@ -277,6 +278,7 @@ class InternalManagementUseCase:
                 "id_management_financial": management.id_management_financial,
                 "code_management": management.code_management,
                 "type_management": management.type_management,
+                "number_document": management.number_document,
                 "amount_pending": management.amount_pending,
                 "amount_paid": management.amount_paid,
                 "invoice_price": management.invoice_price,
@@ -287,8 +289,9 @@ class InternalManagementUseCase:
                 "updated_at": management.updated_at,
                 "created_by": management.created_by,
                 "updated_by": management.updated_by,
+                "last_followup_at": last_followup_at,
             }
-            for management, ticket in rows
+            for management, ticket, last_followup_at in rows
         ]
 
 
@@ -398,6 +401,70 @@ class InternalManagementUseCase:
             "total": self._amount(quotation.total),
         }
 
+    def generate_sale_quotation_pdf(self, id_quote, internal, external):
+        """Retorna el PDF de la proforma en bytes y el nombre del archivo."""
+        quotation, inspection, company, seller, items, components, equipment = (
+            self.internal_management_repository.get_sale_quotation_document(
+                id_quote, internal, external
+            )
+        )
+
+        components_by_item = {}
+        for component in components:
+            components_by_item.setdefault(component.quotation_item_id, []).append(component)
+
+        def product(material_id):
+            record = equipment.get(material_id)
+            return record.product if record else None
+
+        pdf_items = []
+        for item in items:
+            label = None
+            model = item.model
+            description = item.description
+            if item.is_bundle:
+                label, model = "Materiales varios", model or "M/V"
+                description = ", ".join(
+                    f"{format_quantity(component.quantity)} {product(component.material_id)}"
+                    for component in components_by_item.get(item.id_item, [])
+                    if product(component.material_id)
+                )
+            elif item.is_labor:
+                label, model = "Mano de obra", model or "M/V"
+            elif not item.is_new and item.material_id in equipment:
+                model = equipment[item.material_id].model
+                description = equipment[item.material_id].product
+
+            quantity = item.quantity or 0
+            pdf_items.append({
+                "item_number": item.item_number,
+                "model": model,
+                "label": label,
+                "description": description,
+                "quantity": item.quantity,
+                "price": (item.total or 0) / quantity if quantity else item.total,
+                "total": item.total,
+            })
+
+        seller_attributes = (seller.attributes if seller else None) or {}
+        content = generate_proforma_pdf({
+            "quote_number": quotation.quote_number,
+            "date": quotation.created_at,
+            "ruc": company.identity if company else None,
+            "client": company.company_name if company else None,
+            "requested_by": inspection.contact if inspection else None,
+            "project": inspection.title_ticket if inspection else None,
+            "seller_name": seller_attributes.get("fullname") or quotation.created_by or "",
+            "items": pdf_items,
+            "subtotal": quotation.subtotal,
+            "iva": quotation.iva,
+            "total": quotation.total,
+            "delivery_time": quotation.delivery_time,
+            "payment_terms": quotation.payment_terms,
+            "validity_days": quotation.validity_days,
+        })
+        return content, f"proforma_{quotation.quote_number or quotation.id_quote}.pdf"
+
     def get_history_area(self, id_inspection: int, internal, external) -> None:
         rows = self.internal_management_repository.get_history_area(id_inspection, internal, external)
 
@@ -467,6 +534,13 @@ class InternalManagementUseCase:
 
     def new_followup_commercial(self, body, internal, external):
         return self.internal_management_repository.new_followup_commercial(
+            body,
+            internal,
+            external,
+        )
+
+    def new_followup_financial(self, body, internal, external):
+        return self.internal_management_repository.new_followup_financial(
             body,
             internal,
             external,
@@ -632,3 +706,298 @@ class InternalManagementUseCase:
         ]
 
         return results
+
+    def get_followup_financial(self, params, internal, external):
+        filters = {
+            "user": params.get("user"),
+            "id_financial": params.get("id_financial")
+        }
+
+        rows = self.internal_management_repository.get_followup_financial(filters, internal, external)
+
+        results = [
+            {
+                "id_followup": c.id_followup,
+                "management_financial_id": c.management_financial_id,
+                "observations": c.observations,
+                "created_at": c.created_at,
+                "created_by": c.created_by,
+            }
+            for c in rows
+        ]
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Entrega de materiales (bodega)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _quantity(value):
+        """Cantidad de la proforma (Numeric) como número JSON: entero si no tiene decimales."""
+        if value is None:
+            return 0
+        amount = float(value)
+        return int(amount) if amount.is_integer() else amount
+
+    @staticmethod
+    def _required_int(value, field_name):
+        if isinstance(value, bool):
+            value = None
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if not isinstance(value, int):
+            raise CustomAPIException(f"El campo {field_name} debe ser un número entero", 400)
+        return value
+
+    @staticmethod
+    def _optional_text(value):
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @staticmethod
+    def _line_key_text(quotation_item_id, additional_material_id):
+        # Clave estable de la línea de la proforma para el frontend
+        if quotation_item_id is not None:
+            return f"item-{quotation_item_id}"
+        return f"additional-{additional_material_id}"
+
+    def get_project_materials(self, id_task, internal, external):
+        id_task = self._required_int(id_task, "id_task")
+        data = self.internal_management_repository.get_project_materials(
+            id_task, internal, external
+        )
+        equipment = data["equipment"]
+        pendings = data["pendings"]
+        delivered = data["delivered"]
+        fullnames = data["fullnames"]
+        line_key = InternalManagementRepository.line_key
+
+        def material_row(quotation_item_id, additional_material_id, approved, material_id,
+                         fallback_product, fallback_model, group, pending=None):
+            record = equipment.get(material_id) if material_id else None
+            delivered_quantity = delivered.get(line_key(quotation_item_id, additional_material_id), 0)
+            approved_quantity = self._quantity(approved)
+            return {
+                "key": self._line_key_text(quotation_item_id, additional_material_id),
+                "quotation_item_id": quotation_item_id,
+                "additional_material_id": additional_material_id,
+                "material_id": material_id,
+                "product": (record.product if record else None) or fallback_product or "Material sin nombre",
+                "model": (record.model if record else None) or fallback_model,
+                "code": record.code if record else None,
+                "unit": record.unit if record else None,
+                "quantity": approved_quantity,
+                "delivered": delivered_quantity,
+                "pending": max(0, approved_quantity - delivered_quantity),
+                # Sin producto en el catálogo no hay stock que controlar
+                "stock": (record.stock or 0) if record else None,
+                "is_new": pending is not None,
+                "group": group,
+                "pending_material": {
+                    "id_pending_material": pending.id_pending_material,
+                    "status": pending.status,
+                    "name_material": pending.name_material,
+                    "model": pending.model,
+                    "quantity": self._quantity(pending.quantity),
+                    "base_price": self._amount(pending.base_price),
+                    "profit_margin": self._amount(pending.profit_margin),
+                    "profit_margin_dollar": self._amount(pending.profit_margin_dollar),
+                } if pending is not None else None,
+            }
+
+        components_by_item = {}
+        for component in data["components"]:
+            components_by_item.setdefault(component.quotation_item_id, []).append(component)
+
+        materials = []
+        for item in data["items"]:
+            if item.is_labor:
+                continue
+            if item.is_bundle:
+                group = f"Materiales varios (ítem {item.item_number})"
+                for component in components_by_item.get(item.id_item, []):
+                    materials.append(material_row(
+                        None, component.id_extra, component.quantity,
+                        component.material_id, None, None, group,
+                    ))
+                continue
+
+            pending = pendings.get(item.id_item) if item.material_id is None else None
+            materials.append(material_row(
+                item.id_item, None, item.quantity,
+                item.material_id or (pending.material_id if pending else None),
+                (pending.name_material if pending else None) or item.description,
+                (pending.model if pending else None) or item.model,
+                None,
+                pending,
+            ))
+
+        details_by_history = {}
+        for detail in data["details"]:
+            details_by_history.setdefault(detail.history_id, []).append(detail)
+
+        deliveries = [
+            {
+                "id_delivery": history.id_history,
+                "technician": history.delivered_to,
+                "technician_name": fullnames.get(history.delivered_to) or history.delivered_to,
+                "delivered_by": fullnames.get(history.created_by) or history.created_by,
+                "created_at": history.created_at,
+                "observations": history.observation,
+                "status": history.status,
+                "items": [
+                    {
+                        "key": self._line_key_text(detail.quotation_item_id, detail.additional_material_id),
+                        "material_id": detail.material_id,
+                        "pending_material_id": detail.pending_material_id,
+                        "quantity": detail.quantity_delivered,
+                    }
+                    for detail in details_by_history.get(history.id_history, [])
+                ],
+            }
+            for history in data["histories"]
+        ]
+
+        quotation = data["quotation"]
+        return {
+            "project_id": data["task"].id_task,
+            "quote_id": quotation.id_quote,
+            "proforma_code": quotation.quote_number,
+            "technicians": [
+                {"user": user, "fullname_user": fullnames.get(user) or user}
+                for user in data["technicians"]
+            ],
+            "materials": materials,
+            "deliveries": deliveries,
+        }
+
+    def post_material_delivery(self, body, internal, external):
+        body = body or {}
+        delivered_to = self._optional_text(body.get("delivered_to"))
+        if not delivered_to:
+            raise CustomAPIException("Seleccione el técnico que recibe los materiales", 400)
+
+        entries = body.get("items")
+        if not isinstance(entries, list) or not entries:
+            raise CustomAPIException("Ingrese al menos un material a entregar", 400)
+
+        items = []
+        seen = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise CustomAPIException("Los materiales de la entrega no son válidos", 400)
+            has_item = entry.get("quotation_item_id") is not None
+            has_additional = entry.get("additional_material_id") is not None
+            if has_item == has_additional:
+                raise CustomAPIException(
+                    "Cada material debe indicar quotation_item_id o additional_material_id",
+                    400,
+                )
+            quotation_item_id = (
+                self._required_int(entry["quotation_item_id"], "quotation_item_id")
+                if has_item else None
+            )
+            additional_material_id = (
+                self._required_int(entry["additional_material_id"], "additional_material_id")
+                if has_additional else None
+            )
+            # Solo enteros: el stock del catálogo es entero
+            quantity = entry.get("quantity")
+            if isinstance(quantity, bool) or not isinstance(quantity, (int, float)) \
+                    or (isinstance(quantity, float) and not quantity.is_integer()):
+                raise CustomAPIException("Las cantidades entregadas deben ser números enteros", 400)
+            quantity = int(quantity)
+            if quantity <= 0:
+                raise CustomAPIException("Las cantidades entregadas deben ser mayores a cero", 400)
+
+            key = (quotation_item_id, additional_material_id)
+            if key in seen:
+                raise CustomAPIException("Un material se repite en la entrega", 400)
+            seen.add(key)
+            items.append({
+                "quotation_item_id": quotation_item_id,
+                "additional_material_id": additional_material_id,
+                "quantity": quantity,
+            })
+
+        return self.internal_management_repository.post_material_delivery(
+            {
+                "task_id": self._required_int(body.get("task_id"), "task_id"),
+                "delivered_to": delivered_to,
+                "observation": self._optional_text(body.get("observation")),
+                "items": items,
+                "user": body.get("user"),
+            },
+            internal,
+            external,
+        )
+
+    def get_pending_materials(self, params, internal, external):
+        rows = self.internal_management_repository.get_pending_materials(
+            {
+                "quote_id": self._optional_int(params.get("quote_id"), "quote_id"),
+                "status": params.get("status"),
+            },
+            internal,
+            external,
+        )
+        return [
+            {
+                "id_pending_material": pending.id_pending_material,
+                "quote_id": pending.quote_id,
+                "quote_number": quote_number,
+                "quotation_item_id": pending.quotation_item_id,
+                "name_material": pending.name_material,
+                "model": pending.model,
+                "quantity": self._quantity(pending.quantity),
+                "base_price": self._amount(pending.base_price),
+                "profit_margin": self._amount(pending.profit_margin),
+                "profit_margin_dollar": self._amount(pending.profit_margin_dollar),
+                "status": pending.status,
+                "material_id": pending.material_id,
+                "created_at": pending.created_at,
+                "created_by": pending.created_by,
+                "resolved_at": pending.resolved_at,
+                "resolved_by": pending.resolved_by,
+            }
+            for pending, quote_number in rows
+        ]
+
+    def resolve_pending_material(self, id_pending_material, body, internal, external):
+        body = body or {}
+        product = self._optional_text(body.get("product"))
+        if not product:
+            raise CustomAPIException("El nombre del producto es obligatorio", 400)
+
+        stock = body.get("stock")
+        if isinstance(stock, bool) or not isinstance(stock, (int, float)) \
+                or (isinstance(stock, float) and not stock.is_integer()) or stock < 0:
+            raise CustomAPIException("El stock debe ser un número entero mayor o igual a cero", 400)
+
+        provider_id = body.get("provider_id")
+        return self.internal_management_repository.resolve_pending_material(
+            self._required_int(id_pending_material, "id_pending_material"),
+            {
+                "product": product,
+                "code": self._optional_text(body.get("code")),
+                "model": self._optional_text(body.get("model")),
+                "unit": self._optional_text(body.get("unit")),
+                "description": self._optional_text(body.get("description")),
+                "provider_id": (
+                    self._required_int(provider_id, "provider_id")
+                    if provider_id is not None else None
+                ),
+                "base_price": body.get("base_price"),
+                "profit_margin": body.get("profit_margin"),
+                "profit_margin_dollar": body.get("profit_margin_dollar"),
+                "price": body.get("price"),
+                "stock": int(stock),
+                "user": body.get("user"),
+            },
+            internal,
+            external,
+        )

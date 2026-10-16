@@ -2,6 +2,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 
+from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.commercial_ticket_management import (
     CommercialTicketManagement,
 )
@@ -68,7 +69,8 @@ class FakeSession:
         self.inspection = SimpleNamespace(
             id_inspection=7, management_area="Comercial", next_area=None
         )
-        self.management = SimpleNamespace(updated_by=None)
+        # Solo una gestión en estado pendiente (7) se puede editar
+        self.management = SimpleNamespace(updated_by=None, status_id=7)
         self.existing_quotation = existing_quotation
         self.added = []
         self.statements = []
@@ -203,6 +205,20 @@ class TestPutTicketCommercialSaleQuotation(unittest.TestCase):
         self.assertEqual(7, quotation.inspection_id)
         self.assertEqual("editor", quotation.created_by)
         self.assertFalse(any(s.startswith("DELETE") for s in session.statements))
+
+    def test_rejects_editing_a_management_that_is_not_pending(self):
+        session = FakeSession(None)
+        session.management.status_id = 5
+
+        with self.assertRaises(CustomAPIException):
+            build_repository(session).update_ticket_commercial(
+                {"inspection_id": 7, "user": "editor", "sale_quotation": SALE_QUOTATION},
+                "internal",
+                "external",
+            )
+
+        self.assertEqual([], added(session, SaleQuotation))
+        self.assertFalse(session.committed)
 
 
 class TestSerializeSaleQuotation(unittest.TestCase):

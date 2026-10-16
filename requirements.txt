@@ -77,3 +77,5 @@ zipp==3.17.0
 psycopg2-binary==2.9.7
 argon2-cffi==25.1.0
 redis==5.0.7
+reportlab==4.2.5
+svglib==1.5.1

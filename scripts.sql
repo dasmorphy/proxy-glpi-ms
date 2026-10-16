@@ -866,3 +866,214 @@ ALTER TABLE IF EXISTS internal_management.sale_additional_materials
         REFERENCES internal_management.sale_quotation_item (id_item) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE NO ACTION;
+
+--------------------------------------------------------------------------------------------------------------------------------------
+
+
+CREATE TABLE internal_management.financial_followup
+(
+    id_followup integer NOT NULL,
+    management_financial_id integer,
+    observations text,
+    created_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    CONSTRAINT financial_followup_pkey PRIMARY KEY (id_followup),
+    CONSTRAINT management_financial_fkey FOREIGN KEY (management_financial_id)
+        REFERENCES internal_management.financial_ticket_management (id_management_financial) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.financial_followup
+    OWNER to telearseg;
+
+
+CREATE SEQUENCE internal_management.financial_followup_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.financial_followup_id_seq
+    OWNED BY internal_management.financial_followup.id_followup;
+
+ALTER SEQUENCE internal_management.financial_followup_id_seq
+    OWNER TO telearseg;
+
+ALTER TABLE IF EXISTS internal_management.financial_followup
+    ALTER COLUMN id_followup SET DEFAULT nextval('internal_management.financial_followup_id_seq'::regclass);
+
+--------------------------------------------------------------------------------------------------------------------------------------
+-- ENTREGA DE MATERIALES (BODEGA)
+-- pending_material: productos nuevos de la proforma aprobada que aún no existen en el catálogo.
+-- material_delivery_history: cabecera de cada entrega del bodeguero a un técnico del proyecto.
+-- material_delivery_detail: materiales entregados en cada entrega.
+--------------------------------------------------------------------------------------------------------------------------------------
+
+CREATE SEQUENCE internal_management.pending_material_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.pending_material_id_seq
+    OWNER TO telearseg;
+
+CREATE TABLE internal_management.pending_material
+(
+    id_pending_material integer NOT NULL DEFAULT nextval('internal_management.pending_material_id_seq'::regclass),
+    quote_id integer NOT NULL,
+    quotation_item_id integer NOT NULL,
+    name_material text,
+    model text,
+    quantity numeric(15,2),
+    base_price numeric(15,2),
+    profit_margin numeric(15,2),
+    profit_margin_dollar numeric(15,2),
+    -- Pendiente | Creado
+    status text NOT NULL DEFAULT 'Pendiente',
+    -- Producto creado en el catálogo a partir del pendiente
+    material_id integer,
+    created_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    resolved_at timestamp without time zone,
+    resolved_by text,
+    CONSTRAINT pending_material_pkey PRIMARY KEY (id_pending_material),
+    CONSTRAINT pending_material_quotation_item_unique UNIQUE (quotation_item_id),
+    CONSTRAINT pending_material_quote_fkey FOREIGN KEY (quote_id)
+        REFERENCES internal_management.sale_quotation (id_quote) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT pending_material_quotation_item_fkey FOREIGN KEY (quotation_item_id)
+        REFERENCES internal_management.sale_quotation_item (id_item) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT pending_material_material_fkey FOREIGN KEY (material_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.pending_material
+    OWNER to telearseg;
+
+ALTER SEQUENCE internal_management.pending_material_id_seq
+    OWNED BY internal_management.pending_material.id_pending_material;
+
+
+CREATE SEQUENCE internal_management.material_delivery_history_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.material_delivery_history_id_seq
+    OWNER TO telearseg;
+
+CREATE TABLE internal_management.material_delivery_history
+(
+    id_history integer NOT NULL DEFAULT nextval('internal_management.material_delivery_history_id_seq'::regclass),
+    task_id integer NOT NULL,
+    quote_id integer NOT NULL,
+    -- Usuario (username) del técnico que recibe los materiales
+    delivered_to text NOT NULL,
+    observation text,
+    -- Registrada | Anulada (la anulación se implementará más adelante)
+    status text NOT NULL DEFAULT 'Registrada',
+    created_at timestamp without time zone DEFAULT now(),
+    created_by text,
+    CONSTRAINT material_delivery_history_pkey PRIMARY KEY (id_history),
+    CONSTRAINT material_delivery_history_task_fkey FOREIGN KEY (task_id)
+        REFERENCES technical.task_technical (id_task) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_delivery_history_quote_fkey FOREIGN KEY (quote_id)
+        REFERENCES internal_management.sale_quotation (id_quote) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.material_delivery_history
+    OWNER to telearseg;
+
+ALTER SEQUENCE internal_management.material_delivery_history_id_seq
+    OWNED BY internal_management.material_delivery_history.id_history;
+
+CREATE INDEX IF NOT EXISTS material_delivery_history_task_idx
+    ON internal_management.material_delivery_history (task_id);
+
+
+CREATE SEQUENCE internal_management.material_delivery_detail_id_seq
+    INCREMENT 1
+    START 1
+    MINVALUE 1
+    MAXVALUE 2147483647
+    CACHE 1;
+
+ALTER SEQUENCE internal_management.material_delivery_detail_id_seq
+    OWNER TO telearseg;
+
+CREATE TABLE internal_management.material_delivery_detail
+(
+    id_delivery_material integer NOT NULL DEFAULT nextval('internal_management.material_delivery_detail_id_seq'::regclass),
+    history_id integer NOT NULL,
+    -- Línea de la proforma que se entrega: un ítem o un componente de "Materiales varios"
+    quotation_item_id integer,
+    additional_material_id integer,
+    -- Producto del catálogo; nulo mientras el material siga pendiente de crear
+    material_id integer,
+    pending_material_id integer,
+    quantity_delivered integer NOT NULL,
+    -- Foto de lo que quedaba por entregar de la línea luego de esta entrega
+    quantity_remaining numeric(15,2),
+    created_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT material_delivery_detail_pkey PRIMARY KEY (id_delivery_material),
+    CONSTRAINT material_delivery_detail_quantity_check CHECK (quantity_delivered > 0),
+    CONSTRAINT material_delivery_detail_source_check CHECK (
+        (quotation_item_id IS NOT NULL AND additional_material_id IS NULL)
+        OR (quotation_item_id IS NULL AND additional_material_id IS NOT NULL)
+    ),
+    CONSTRAINT material_delivery_detail_material_check CHECK (
+        material_id IS NOT NULL OR pending_material_id IS NOT NULL
+    ),
+    CONSTRAINT material_delivery_detail_history_fkey FOREIGN KEY (history_id)
+        REFERENCES internal_management.material_delivery_history (id_history) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_delivery_detail_quotation_item_fkey FOREIGN KEY (quotation_item_id)
+        REFERENCES internal_management.sale_quotation_item (id_item) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_delivery_detail_additional_fkey FOREIGN KEY (additional_material_id)
+        REFERENCES internal_management.sale_additional_materials (id_extra) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_delivery_detail_material_fkey FOREIGN KEY (material_id)
+        REFERENCES technical.technical_equipment (id_equipment) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT material_delivery_detail_pending_fkey FOREIGN KEY (pending_material_id)
+        REFERENCES internal_management.pending_material (id_pending_material) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS internal_management.material_delivery_detail
+    OWNER to telearseg;
+
+ALTER SEQUENCE internal_management.material_delivery_detail_id_seq
+    OWNED BY internal_management.material_delivery_detail.id_delivery_material;
+
+CREATE INDEX IF NOT EXISTS material_delivery_detail_history_idx
+    ON internal_management.material_delivery_detail (history_id);

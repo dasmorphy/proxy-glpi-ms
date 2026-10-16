@@ -264,6 +264,62 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /sale-quotation/{id_quote}/pdf:
+    get:
+      tags:
+      - Tickets Management
+      summary: Genera el PDF de una proforma
+      description: >-
+        Genera la cotización comercial de internal_management.sale_quotation en PDF.
+        Con inline=true se sirve para visualizarlo en el navegador; por defecto se
+        descarga como adjunto.
+      operationId: download_sale_quotation_pdf
+      parameters:
+      - name: id_quote
+        in: path
+        required: true
+        schema:
+          type: integer
+          example: 1
+      - name: inline
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: externalTransactionId
+        in: header
+        required: true
+        schema:
+          type: string
+          example: "fcea920f7412b5da7be0cf42b8c93759"
+      - name: channel
+        in: header
+        required: true
+        schema:
+          type: string
+          example: "TLSG_WEB"
+      responses:
+        "200":
+          description: PDF de la proforma
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Proforma no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /type-solution:
     get:
       tags:
@@ -1336,7 +1392,7 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "inspection_id identifica el ticket GLPI; los demás campos del POST son opcionales."
+                  description: "inspection_id identifica la inspección; id_management_financial (opcional) la gestión a editar, si no se envía se edita la última. Los demás campos del POST son opcionales."
                 channel:
                   type: string
                 externalTransactionId:
@@ -1536,7 +1592,7 @@ paths:
   /followup-commercial:
     get:
       tags:
-      - Tickets Management
+      - Followup Management
       summary: Obtiene los seguimientos comerciales
       description: Devuelve todos los seguimientos de la base
       operationId: get_followup_commercial
@@ -1599,7 +1655,7 @@ paths:
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
     post:
       tags:
-      - Tickets Management
+      - Followup Management
       summary: Crea un nuevo seguimiento comercial.
       description: Guarda un seguimiento
       operationId: new_followup_commercial
@@ -1612,6 +1668,132 @@ paths:
                   type: object
                   properties:
                     commercial_management_id:
+                      type: integer
+                      example: 1
+                    observations:
+                      nullable: true
+                      type: string
+                      example: N/A
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /followup-financial:
+    get:
+      tags:
+      - Followup Management
+      summary: Obtiene los seguimientos financieros
+      description: Devuelve todos los seguimientos de la base
+      operationId: get_followup_financial
+      parameters:
+        - name: id_financial
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
+        - name: externalTransactionId
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "fcea920f7412b5da7be0cf42b8c93759"
+        - name: channel
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "TLSG_WEB"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Followup Management
+      summary: Crea un nuevo seguimiento financiero.
+      description: Guarda un seguimiento
+      operationId: new_followup_financial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    financial_management_id:
                       type: integer
                       example: 1
                     observations:
@@ -1879,7 +2061,236 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /project-materials/{id_task}:
+    get:
+      tags:
+      - Material Delivery
+      summary: Obtiene los materiales del proyecto para la entrega de bodega
+      description: Materiales de la proforma aprobada (aprobado, entregado, pendiente y stock), técnicos asignados e historial de entregas
+      operationId: get_project_materials
+      parameters:
+        - name: id_task
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 1
+        - $ref: "#/components/parameters/ExternalTransactionIdHeader"
+        - $ref: "#/components/parameters/ChannelHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /material-delivery:
+    post:
+      tags:
+      - Material Delivery
+      summary: Registra una entrega de materiales a un técnico
+      description: Guarda el historial y su detalle y descuenta el stock del catálogo. Las cantidades deben ser enteras.
+      operationId: post_material_delivery
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    task_id:
+                      type: integer
+                      example: 1
+                    delivered_to:
+                      type: string
+                      example: jperez
+                    observation:
+                      nullable: true
+                      type: string
+                      example: Entrega para la instalación del rack
+                    items:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          quotation_item_id:
+                            nullable: true
+                            type: integer
+                            example: 10
+                          additional_material_id:
+                            nullable: true
+                            type: integer
+                            example: null
+                          quantity:
+                            type: integer
+                            example: 2
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /pending-material:
+    get:
+      tags:
+      - Material Delivery
+      summary: Obtiene los materiales pendientes de crear en el catálogo
+      description: Productos nuevos de proformas aprobadas
+      operationId: get_pending_materials
+      parameters:
+        - name: quote_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Pendiente
+        - $ref: "#/components/parameters/ExternalTransactionIdHeader"
+        - $ref: "#/components/parameters/ChannelHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /pending-material/{id_pending_material}/resolve:
+    post:
+      tags:
+      - Material Delivery
+      summary: Crea en el catálogo el producto de un material pendiente
+      description: El stock debe ser al menos la cantidad de la proforma; se guarda descontando lo ya entregado con el pendiente
+      operationId: resolve_pending_material
+      parameters:
+        - name: id_pending_material
+          in: path
+          required: true
+          schema:
+            type: integer
+            example: 1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  properties:
+                    product:
+                      type: string
+                      example: Soporte de pared personalizado
+                    code:
+                      nullable: true
+                      type: string
+                    model:
+                      nullable: true
+                      type: string
+                    unit:
+                      nullable: true
+                      type: string
+                      example: Unid.
+                    description:
+                      nullable: true
+                      type: string
+                    provider_id:
+                      nullable: true
+                      type: integer
+                    base_price:
+                      nullable: true
+                      type: number
+                    profit_margin:
+                      nullable: true
+                      type: number
+                    profit_margin_dollar:
+                      nullable: true
+                      type: number
+                    price:
+                      nullable: true
+                      type: number
+                    stock:
+                      type: integer
+                      example: 10
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
 components:
+  parameters:
+    ExternalTransactionIdHeader:
+      name: externalTransactionId
+      in: header
+      required: false
+      schema:
+        type: string
+        example: "fcea920f7412b5da7be0cf42b8c93759"
+    ChannelHeader:
+      name: channel
+      in: header
+      required: false
+      schema:
+        type: string
+        example: "TLSG_WEB"
+  responses:
+    ErrorResponse:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResponseError"
   schemas:
     InspectionDocumentFiles:
       type: array

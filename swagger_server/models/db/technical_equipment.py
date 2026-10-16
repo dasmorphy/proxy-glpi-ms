@@ -23,6 +23,8 @@ class TechnicalEquipment(Base):
         nullable=False
     )
 
+    provider_id = Column(Integer)
+
     code = Column(Text)
     product = Column(Text)
     unit = Column(Text)

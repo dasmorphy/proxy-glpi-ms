@@ -1,7 +1,8 @@
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from loguru import logger
-from sqlalchemy import and_, delete, exists, func, select
+from sqlalchemy import and_, delete, exists, func, select, update
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.client_companies import ClientCompany
@@ -11,19 +12,25 @@ from swagger_server.models.db.commercial_origin import CommercialOrigin
 from swagger_server.models.db.commercial_ticket_management import CommercialTicketManagement
 from swagger_server.models.db.commercial_ticket_status import CommercialTicketStatus
 from swagger_server.models.db.commercial_type_solution import CommercialTypeSolution
+from swagger_server.models.db.financial_followup import FinancialFollowup
 from swagger_server.models.db.financial_ticket_management import FinancialTicketManagement
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
 from swagger_server.models.db.inspection_documents import InspectionDocuments
 from swagger_server.models.db.location import ClientLocation
+from swagger_server.models.db.material_delivery_detail import MaterialDeliveryDetail
+from swagger_server.models.db.material_delivery_history import MaterialDeliveryHistory
 from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
+from swagger_server.models.db.pending_material import PendingMaterial
 from swagger_server.models.db.providers_products import ProvidersProducts
 from swagger_server.models.db.sale_additional_materials import SaleAdditionalMaterials
 from swagger_server.models.db.sale_quotation import SaleQuotation
 from swagger_server.models.db.sale_quotation_item import SaleQuotationItem
 from swagger_server.models.db.task_technical import TaskTechnical
+from swagger_server.models.db.task_technical_assignments import TaskTechnicalAssignment
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_record import TechnicalRecord
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
+from swagger_server.models.db.users import Users
 from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.resources.databases.postgresql import PostgreSQLClient
 from swagger_server.utils.inspection_documents import (
@@ -36,6 +43,9 @@ from swagger_server.utils.inspection_documents import (
 
 
 class InternalManagementRepository:
+    COMMERCIAL_STATUS_APPROVED = 5
+    COMMERCIAL_STATUS_PENDING = 7
+
     def __init__(self):
         self.db_telearseg = PostgreSQLClient("TELEARSEG")
         self.db_zentinel = PostgreSQLClient("ZENTINEL")
@@ -60,6 +70,7 @@ class InternalManagementRepository:
     def _save_sale_quotation(session, inspection_id, quotation, user):
         """Guarda la proforma de la inspección. Si ya existe una se actualiza su
         cabecera y sus items se reemplazan completos con los recibidos."""
+        InternalManagementRepository._validate_quotation_quantities(quotation)
         sale_quotation = session.execute(
             select(SaleQuotation)
             .where(SaleQuotation.inspection_id == inspection_id)
@@ -131,6 +142,8 @@ class InternalManagementRepository:
                     created_by=user,
                     updated_by=user,
                 ))
+
+        return sale_quotation
 
     @staticmethod
     def _get_sale_quotations(session, inspection_ids):
@@ -534,12 +547,16 @@ class InternalManagementRepository:
                     new_register.id_management_commercial
                 )
                 if body.get('sale_quotation'):
-                    self._save_sale_quotation(
+                    sale_quotation = self._save_sale_quotation(
                         session,
                         ticket.id_inspection,
                         body['sale_quotation'],
                         body.get('user'),
                     )
+                    if new_register.status_id == self.COMMERCIAL_STATUS_APPROVED:
+                        self._generate_pending_materials(
+                            session, sale_quotation.id_quote, body.get('user')
+                        )
                 self._save_inspection_documents(
                     session, ticket.id_inspection, files, saved_paths
                 )
@@ -924,12 +941,30 @@ class InternalManagementRepository:
     def get_ticket_financial(self, filters, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
+                last_followup = (
+                    select(
+                        FinancialFollowup.management_financial_id,
+                        func.max(FinancialFollowup.created_at).label("last_followup_at"),
+                    )
+                    .group_by(FinancialFollowup.management_financial_id)
+                    .subquery()
+                )
+
                 stmt = (
-                    select(FinancialTicketManagement, InspectionTechnical)
+                    select(
+                        FinancialTicketManagement,
+                        InspectionTechnical,
+                        last_followup.c.last_followup_at,
+                    )
                     .join(
                         InspectionTechnical,
                         InspectionTechnical.id_inspection
                         == FinancialTicketManagement.ticket_id,
+                    )
+                    .outerjoin(
+                        last_followup,
+                        last_followup.c.management_financial_id
+                        == FinancialTicketManagement.id_management_financial,
                     )
                 )
                 conditions = self._ticket_conditions(
@@ -1064,6 +1099,13 @@ class InternalManagementRepository:
                 if management is None:
                     raise CustomAPIException("Gestión comercial no encontrada", 404)
 
+                # Aprobada, perdida, etc. ya no se edita: la proforma aprobada alimenta a bodega
+                if management.status_id != self.COMMERCIAL_STATUS_PENDING:
+                    raise CustomAPIException(
+                        "Solo se puede editar una gestión comercial en estado pendiente",
+                        400,
+                    )
+
                 self._apply_fields(
                     management,
                     body,
@@ -1088,13 +1130,23 @@ class InternalManagementRepository:
                 )
                 self._set_updated_by(body, management)
 
+                sale_quotation = None
                 if body.get('sale_quotation'):
-                    self._save_sale_quotation(
+                    sale_quotation = self._save_sale_quotation(
                         session,
                         ticket.id_inspection,
                         body['sale_quotation'],
                         body.get('user'),
                     )
+
+                if management.status_id == self.COMMERCIAL_STATUS_APPROVED:
+                    sale_quotation = sale_quotation or self._get_latest_quotation(
+                        session, ticket.id_inspection
+                    )
+                    if sale_quotation is not None:
+                        self._generate_pending_materials(
+                            session, sale_quotation.id_quote, body.get('user')
+                        )
 
                 if body.get('status_id') == 5 and ticket.management_area == 'Comercial':
                     ticket.management_area = 'Proyectos'
@@ -1126,12 +1178,23 @@ class InternalManagementRepository:
             try:
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
-                management = self._get_latest_management(
-                    session,
-                    FinancialTicketManagement,
-                    ticket.id_inspection,
-                    FinancialTicketManagement.id_management_financial,
-                )
+                if body.get("id_management_financial") is not None:
+                    # Se edita la gestión elegida en la tabla, no solo la última
+                    management = session.execute(
+                        select(FinancialTicketManagement).where(
+                            FinancialTicketManagement.id_management_financial
+                            == body["id_management_financial"],
+                            FinancialTicketManagement.ticket_id
+                            == ticket.id_inspection,
+                        )
+                    ).scalars().first()
+                else:
+                    management = self._get_latest_management(
+                        session,
+                        FinancialTicketManagement,
+                        ticket.id_inspection,
+                        FinancialTicketManagement.id_management_financial,
+                    )
                 if management is None:
                     raise CustomAPIException("Gestión financiera no encontrada", 404)
 
@@ -1146,9 +1209,15 @@ class InternalManagementRepository:
                         "observations": "observations",
                         "status": "status",
                         "date_document": "date_document",
+                        "number_document": "number_document",
                     },
                 )
                 self._set_updated_by(body, management)
+
+                # Igual que al registrar: una factura cobrada finaliza el ticket
+                if management.status == "Cobrada":
+                    ticket.status = "Finalizado"
+
                 session.commit()
             except Exception as exception:
                 session.rollback()
@@ -1286,7 +1355,66 @@ class InternalManagementRepository:
                     external,
                 )
 
-    
+
+    def get_followup_financial(self, filters, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                stmt = (
+                    select(
+                        FinancialFollowup
+                    )
+                    .order_by(FinancialFollowup.created_at.desc())
+                )
+                
+                if filters.get("id_financial"):
+                    stmt = stmt.where(FinancialFollowup.management_financial_id == filters["id_financial"])
+
+                if filters.get("user"):
+                    stmt = stmt.where(FinancialFollowup.created_by == filters["user"])
+
+                rows = session.execute(stmt).scalars().all()                
+                return rows
+            
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los seguimientos de la base de datos",
+                    internal,
+                    external,
+                )
+
+
+    def new_followup_financial(self, body, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                ticket_financial = session.execute(
+                    select(FinancialTicketManagement).where(
+                        FinancialTicketManagement.id_management_financial == body.get("management_financial_id")
+                    )
+                ).scalar_one_or_none()
+
+                if ticket_financial is None:
+                    raise CustomAPIException("Ticket financiero no encontrado", 404)
+
+                new_followup = FinancialFollowup(
+                    management_financial_id=body.get("management_financial_id"),
+                    observations=body.get("observations"),
+                    created_by=body.get("user")
+                )
+
+                session.add(new_followup)
+                session.commit()
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al insertar la gestión financiera en la base de datos",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
 
     def new_followup_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
@@ -1727,6 +1855,73 @@ class InternalManagementRepository:
                     external,
                 )
 
+    def get_sale_quotation_document(self, id_quote, internal, external):
+        """Retorna todo lo necesario para generar el PDF de una proforma."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                quotation = session.execute(
+                    select(SaleQuotation).where(SaleQuotation.id_quote == id_quote)
+                ).scalar_one_or_none()
+                if quotation is None:
+                    raise CustomAPIException("Proforma no encontrada", 404)
+
+                inspection = None
+                if quotation.inspection_id is not None:
+                    inspection = self._get_inspection(session, quotation.inspection_id)
+
+                company = None
+                if quotation.client_company is not None:
+                    company = session.execute(
+                        select(ClientCompany).where(
+                            ClientCompany.id_company == quotation.client_company
+                        )
+                    ).scalar_one_or_none()
+
+                # created_by guarda el usuario de sesión (public.users.user)
+                seller = None
+                if quotation.created_by:
+                    seller = session.execute(
+                        select(Users.user, Users.attributes).where(
+                            Users.user == quotation.created_by
+                        )
+                    ).first()
+
+                items = session.execute(
+                    select(SaleQuotationItem)
+                    .where(SaleQuotationItem.sale_quote_id == id_quote)
+                    .order_by(SaleQuotationItem.item_number, SaleQuotationItem.id_item)
+                ).scalars().all()
+                components = session.execute(
+                    select(SaleAdditionalMaterials)
+                    .where(SaleAdditionalMaterials.sale_quote_id == id_quote)
+                    .order_by(SaleAdditionalMaterials.id_extra)
+                ).scalars().all()
+
+                material_ids = {
+                    record.material_id
+                    for record in (*items, *components)
+                    if record.material_id is not None
+                }
+                equipment = {}
+                if material_ids:
+                    equipment = {
+                        record.id_equipment: record
+                        for record in session.execute(
+                            select(TechnicalEquipment).where(
+                                TechnicalEquipment.id_equipment.in_(material_ids)
+                            )
+                        ).scalars().all()
+                    }
+
+                return quotation, inspection, company, seller, items, components, equipment
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener la proforma de la base de datos",
+                    internal,
+                    external,
+                )
+
     @staticmethod
     def _get_inspection(session, inspection_id):
         inspection = session.execute(
@@ -1738,3 +1933,524 @@ class InternalManagementRepository:
         if inspection is None:
             raise CustomAPIException("Inspección no encontrada", 404)
         return inspection
+
+    # ------------------------------------------------------------------
+    # Entrega de materiales (bodega)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_integer_quantity(value):
+        if value is None or isinstance(value, bool):
+            return False
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return False
+        return amount.is_finite() and amount == amount.to_integral_value()
+
+    @classmethod
+    def _validate_quotation_quantities(cls, quotation):
+        """Las cantidades de materiales deben ser enteras porque el stock del
+        catálogo es entero. La mano de obra no se entrega en bodega y no se valida."""
+        for item in quotation.get('items') or []:
+            if item.get('is_bundle'):
+                for component in item.get('components') or []:
+                    if not cls._is_integer_quantity(component.get('quantity')):
+                        raise CustomAPIException(
+                            f"Las cantidades de los materiales varios del ítem {item.get('item')} deben ser números enteros",
+                            400,
+                        )
+            elif not item.get('is_labor') and not cls._is_integer_quantity(item.get('quantity')):
+                raise CustomAPIException(
+                    f"La cantidad del ítem {item.get('item')} debe ser un número entero",
+                    400,
+                )
+
+    @staticmethod
+    def _format_quantity(value):
+        amount = Decimal(str(value or 0))
+        if amount == amount.to_integral_value():
+            return str(int(amount))
+        return str(amount.normalize())
+
+    @staticmethod
+    def line_key(quotation_item_id, additional_material_id):
+        """Identifica una línea de la proforma: un ítem o un componente de materiales varios."""
+        if quotation_item_id is not None:
+            return ("item", quotation_item_id)
+        return ("additional", additional_material_id)
+
+    @staticmethod
+    def _get_latest_quotation(session, inspection_id, lock=False):
+        stmt = (
+            select(SaleQuotation)
+            .where(SaleQuotation.inspection_id == inspection_id)
+            .order_by(SaleQuotation.id_quote.desc())
+        )
+        if lock:
+            stmt = stmt.with_for_update()
+        return session.execute(stmt).scalars().first()
+
+    @staticmethod
+    def _generate_pending_materials(session, quote_id, user):
+        """Registra como pendientes los productos nuevos de la proforma aprobada.
+        Es idempotente: los ítems que ya tienen pendiente no se duplican."""
+        existing = set(
+            session.execute(
+                select(PendingMaterial.quotation_item_id).where(
+                    PendingMaterial.quote_id == quote_id
+                )
+            ).scalars().all()
+        )
+        new_items = session.execute(
+            select(SaleQuotationItem).where(
+                SaleQuotationItem.sale_quote_id == quote_id,
+                SaleQuotationItem.is_new.is_(True),
+                SaleQuotationItem.is_labor.isnot(True),
+                SaleQuotationItem.material_id.is_(None),
+            )
+        ).scalars().all()
+
+        created = []
+        for item in new_items:
+            if item.id_item in existing:
+                continue
+            pending = PendingMaterial(
+                quote_id=quote_id,
+                quotation_item_id=item.id_item,
+                name_material=item.description,
+                model=item.model,
+                quantity=item.quantity,
+                base_price=item.base_price,
+                profit_margin=item.profit_margin,
+                profit_margin_dollar=item.profit_margin_dollar,
+                status=PendingMaterial.STATUS_PENDING,
+                created_by=user,
+            )
+            session.add(pending)
+            created.append(pending)
+
+        if created:
+            session.flush()
+        return created
+
+    def _get_project_quotation(self, session, task_id, lock=False):
+        task = session.get(TaskTechnical, task_id)
+        if task is None:
+            raise CustomAPIException("Proyecto no encontrado", 404)
+
+        quotation = self._get_latest_quotation(session, task.inspection_id, lock=lock)
+        if quotation is None:
+            raise CustomAPIException("El proyecto no tiene una proforma registrada", 404)
+        return task, quotation
+
+    @classmethod
+    def _delivered_by_line(cls, session, quote_id):
+        """Cantidad entregada por línea de la proforma, sin contar entregas anuladas."""
+        rows = session.execute(
+            select(
+                MaterialDeliveryDetail.quotation_item_id,
+                MaterialDeliveryDetail.additional_material_id,
+                func.sum(MaterialDeliveryDetail.quantity_delivered),
+            )
+            .join(
+                MaterialDeliveryHistory,
+                MaterialDeliveryHistory.id_history == MaterialDeliveryDetail.history_id,
+            )
+            .where(
+                MaterialDeliveryHistory.quote_id == quote_id,
+                MaterialDeliveryHistory.status == MaterialDeliveryHistory.STATUS_REGISTERED,
+            )
+            .group_by(
+                MaterialDeliveryDetail.quotation_item_id,
+                MaterialDeliveryDetail.additional_material_id,
+            )
+        ).all()
+        return {
+            cls.line_key(item_id, additional_id): int(total or 0)
+            for item_id, additional_id, total in rows
+        }
+
+    def get_project_materials(self, task_id, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                task, quotation = self._get_project_quotation(session, task_id)
+
+                # Respaldo para proformas aprobadas antes de existir los pendientes
+                if self._generate_pending_materials(session, quotation.id_quote, None):
+                    session.commit()
+
+                items = session.execute(
+                    select(SaleQuotationItem)
+                    .where(SaleQuotationItem.sale_quote_id == quotation.id_quote)
+                    .order_by(SaleQuotationItem.item_number, SaleQuotationItem.id_item)
+                ).scalars().all()
+                components = session.execute(
+                    select(SaleAdditionalMaterials)
+                    .where(SaleAdditionalMaterials.sale_quote_id == quotation.id_quote)
+                    .order_by(SaleAdditionalMaterials.id_extra)
+                ).scalars().all()
+                pendings = {
+                    pending.quotation_item_id: pending
+                    for pending in session.execute(
+                        select(PendingMaterial).where(
+                            PendingMaterial.quote_id == quotation.id_quote
+                        )
+                    ).scalars().all()
+                }
+
+                material_ids = (
+                    {item.material_id for item in items if item.material_id}
+                    | {component.material_id for component in components if component.material_id}
+                    | {pending.material_id for pending in pendings.values() if pending.material_id}
+                )
+                equipment = {}
+                if material_ids:
+                    equipment = {
+                        record.id_equipment: record
+                        for record in session.execute(
+                            select(TechnicalEquipment).where(
+                                TechnicalEquipment.id_equipment.in_(material_ids)
+                            )
+                        ).scalars().all()
+                    }
+
+                histories = session.execute(
+                    select(MaterialDeliveryHistory)
+                    .where(MaterialDeliveryHistory.quote_id == quotation.id_quote)
+                    .order_by(
+                        MaterialDeliveryHistory.created_at.desc(),
+                        MaterialDeliveryHistory.id_history.desc(),
+                    )
+                ).scalars().all()
+                details = []
+                if histories:
+                    details = session.execute(
+                        select(MaterialDeliveryDetail)
+                        .where(
+                            MaterialDeliveryDetail.history_id.in_(
+                                [history.id_history for history in histories]
+                            )
+                        )
+                        .order_by(MaterialDeliveryDetail.id_delivery_material)
+                    ).scalars().all()
+
+                technicians = list(dict.fromkeys(
+                    user
+                    for user in session.execute(
+                        select(TaskTechnicalAssignment.user)
+                        .where(TaskTechnicalAssignment.task_id == task.id_task)
+                        .order_by(TaskTechnicalAssignment.id_assignment)
+                    ).scalars().all()
+                    if user
+                ))
+
+                usernames = (
+                    set(technicians)
+                    | {history.delivered_to for history in histories}
+                    | {history.created_by for history in histories if history.created_by}
+                )
+                fullnames = {}
+                if usernames:
+                    fullnames = {
+                        user: (attributes or {}).get("fullname")
+                        for user, attributes in session.execute(
+                            select(Users.user, Users.attributes).where(
+                                Users.user.in_(usernames)
+                            )
+                        ).all()
+                    }
+
+                return {
+                    "task": task,
+                    "quotation": quotation,
+                    "items": items,
+                    "components": components,
+                    "pendings": pendings,
+                    "equipment": equipment,
+                    "delivered": self._delivered_by_line(session, quotation.id_quote),
+                    "histories": histories,
+                    "details": details,
+                    "technicians": technicians,
+                    "fullnames": fullnames,
+                }
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los materiales del proyecto",
+                    internal,
+                    external,
+                )
+
+    def post_material_delivery(self, data, internal, external):
+        """Registra la entrega y descuenta el stock del catálogo en una sola
+        transacción. Los productos nuevos aún pendientes de crear se registran
+        con su pendiente y no descuentan stock."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                user = data.get("user")
+                # Bloquear la proforma serializa las entregas del proyecto
+                task, quotation = self._get_project_quotation(
+                    session, data["task_id"], lock=True
+                )
+                self._generate_pending_materials(session, quotation.id_quote, user)
+
+                items = {
+                    item.id_item: item
+                    for item in session.execute(
+                        select(SaleQuotationItem).where(
+                            SaleQuotationItem.sale_quote_id == quotation.id_quote
+                        )
+                    ).scalars().all()
+                }
+                components = {
+                    component.id_extra: component
+                    for component in session.execute(
+                        select(SaleAdditionalMaterials).where(
+                            SaleAdditionalMaterials.sale_quote_id == quotation.id_quote
+                        )
+                    ).scalars().all()
+                }
+                pendings = {
+                    pending.quotation_item_id: pending
+                    for pending in session.execute(
+                        select(PendingMaterial).where(
+                            PendingMaterial.quote_id == quotation.id_quote
+                        )
+                    ).scalars().all()
+                }
+                delivered = self._delivered_by_line(session, quotation.id_quote)
+
+                lines = []
+                for entry in data["items"]:
+                    pending = None
+                    if entry.get("quotation_item_id") is not None:
+                        item = items.get(entry["quotation_item_id"])
+                        if item is None or item.is_labor or item.is_bundle:
+                            raise CustomAPIException(
+                                f"El ítem {entry['quotation_item_id']} no es un material de la proforma del proyecto",
+                                400,
+                            )
+                        approved = item.quantity
+                        material_id = item.material_id
+                        name = item.description
+                        if material_id is None:
+                            pending = pendings.get(item.id_item)
+                            if pending is None:
+                                raise CustomAPIException(
+                                    f'El producto nuevo "{item.description}" no tiene un pendiente registrado',
+                                    400,
+                                )
+                            # Sigue en None mientras el producto no se cree en el catálogo
+                            material_id = pending.material_id
+                    else:
+                        component = components.get(entry["additional_material_id"])
+                        if component is None:
+                            raise CustomAPIException(
+                                f"El material {entry['additional_material_id']} no pertenece a la proforma del proyecto",
+                                400,
+                            )
+                        approved = component.quantity
+                        material_id = component.material_id
+                        name = None
+
+                    lines.append({
+                        "key": self.line_key(
+                            entry.get("quotation_item_id"),
+                            entry.get("additional_material_id"),
+                        ),
+                        "quotation_item_id": entry.get("quotation_item_id"),
+                        "additional_material_id": entry.get("additional_material_id"),
+                        "approved": Decimal(str(approved or 0)),
+                        "material_id": material_id,
+                        "pending": pending,
+                        "name": name,
+                        "quantity": entry["quantity"],
+                    })
+
+                equipment_ids = {line["material_id"] for line in lines if line["material_id"]}
+                equipment = {}
+                if equipment_ids:
+                    equipment = {
+                        record.id_equipment: record
+                        for record in session.execute(
+                            select(TechnicalEquipment)
+                            .where(TechnicalEquipment.id_equipment.in_(equipment_ids))
+                            .with_for_update()
+                        ).scalars().all()
+                    }
+
+                history = MaterialDeliveryHistory(
+                    task_id=task.id_task,
+                    quote_id=quotation.id_quote,
+                    delivered_to=data["delivered_to"],
+                    observation=data.get("observation"),
+                    status=MaterialDeliveryHistory.STATUS_REGISTERED,
+                    created_by=user,
+                )
+                session.add(history)
+                session.flush()
+
+                for line in lines:
+                    record = equipment.get(line["material_id"]) if line["material_id"] else None
+                    if line["material_id"] and record is None:
+                        raise CustomAPIException(
+                            f"El material {line['material_id']} no existe en el catálogo",
+                            404,
+                        )
+                    name = (
+                        (record.product if record else None)
+                        or line["name"]
+                        or (line["pending"].name_material if line["pending"] else None)
+                        or "Material"
+                    )
+
+                    remaining = line["approved"] - delivered.get(line["key"], 0)
+                    if line["quantity"] > remaining:
+                        raise CustomAPIException(
+                            f'"{name}" supera lo pendiente de entregar ({self._format_quantity(max(remaining, 0))})',
+                            400,
+                        )
+
+                    if record is not None:
+                        stock = record.stock or 0
+                        if line["quantity"] > stock:
+                            raise CustomAPIException(
+                                f'Stock insuficiente de "{name}": disponible {stock}, solicitado {line["quantity"]}',
+                                400,
+                            )
+                        record.stock = stock - line["quantity"]
+                        record.updated_by = user
+
+                    session.add(MaterialDeliveryDetail(
+                        history_id=history.id_history,
+                        quotation_item_id=line["quotation_item_id"],
+                        additional_material_id=line["additional_material_id"],
+                        material_id=line["material_id"],
+                        pending_material_id=(
+                            line["pending"].id_pending_material if line["pending"] else None
+                        ),
+                        quantity_delivered=line["quantity"],
+                        quantity_remaining=remaining - line["quantity"],
+                    ))
+                    delivered[line["key"]] = delivered.get(line["key"], 0) + line["quantity"]
+
+                session.commit()
+                return history.id_history
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al registrar la entrega de materiales",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
+    def get_pending_materials(self, filters, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                stmt = (
+                    select(PendingMaterial, SaleQuotation.quote_number)
+                    .join(SaleQuotation, SaleQuotation.id_quote == PendingMaterial.quote_id)
+                    .order_by(
+                        PendingMaterial.created_at.desc(),
+                        PendingMaterial.id_pending_material.desc(),
+                    )
+                )
+                if filters.get("quote_id") is not None:
+                    stmt = stmt.where(PendingMaterial.quote_id == filters["quote_id"])
+                if filters.get("status"):
+                    stmt = stmt.where(PendingMaterial.status == filters["status"])
+                return session.execute(stmt).all()
+            except Exception as exception:
+                self._raise_database_error(
+                    exception,
+                    "Error al obtener los materiales pendientes",
+                    internal,
+                    external,
+                )
+
+    def resolve_pending_material(self, id_pending_material, data, internal, external):
+        """Crea en el catálogo el producto de un pendiente. El stock guardado es
+        el ingresado menos lo que ya se entregó con el pendiente, y esas entregas
+        quedan enlazadas al producto creado."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                user = data.get("user")
+                pending = session.execute(
+                    select(PendingMaterial)
+                    .where(PendingMaterial.id_pending_material == id_pending_material)
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if pending is None:
+                    raise CustomAPIException("Material pendiente no encontrado", 404)
+                if pending.status != PendingMaterial.STATUS_PENDING:
+                    raise CustomAPIException(
+                        "El material pendiente ya fue creado en el catálogo", 400
+                    )
+
+                stock = data["stock"]
+                if stock < Decimal(str(pending.quantity or 0)):
+                    raise CustomAPIException(
+                        f"El stock debe ser al menos la cantidad de la proforma ({self._format_quantity(pending.quantity)})",
+                        400,
+                    )
+
+                delivered = session.execute(
+                    select(func.coalesce(func.sum(MaterialDeliveryDetail.quantity_delivered), 0))
+                    .join(
+                        MaterialDeliveryHistory,
+                        MaterialDeliveryHistory.id_history == MaterialDeliveryDetail.history_id,
+                    )
+                    .where(
+                        MaterialDeliveryDetail.pending_material_id == pending.id_pending_material,
+                        MaterialDeliveryHistory.status == MaterialDeliveryHistory.STATUS_REGISTERED,
+                    )
+                ).scalar_one()
+
+                equipment = TechnicalEquipment(
+                    code=data.get("code"),
+                    product=data["product"],
+                    unit=data.get("unit"),
+                    model=data.get("model"),
+                    provider_id=data.get("provider_id"),
+                    base_price=data.get("base_price"),
+                    profit_margin=data.get("profit_margin"),
+                    profit_margin_dollar=data.get("profit_margin_dollar"),
+                    price=data.get("price"),
+                    description=data.get("description"),
+                    stock=stock - int(delivered or 0),
+                    created_by=user,
+                    updated_by=user,
+                )
+                session.add(equipment)
+                session.flush()
+
+                session.execute(
+                    update(MaterialDeliveryDetail)
+                    .where(
+                        MaterialDeliveryDetail.pending_material_id == pending.id_pending_material,
+                        MaterialDeliveryDetail.material_id.is_(None),
+                    )
+                    .values(material_id=equipment.id_equipment)
+                )
+
+                pending.status = PendingMaterial.STATUS_CREATED
+                pending.material_id = equipment.id_equipment
+                pending.resolved_at = datetime.now()
+                pending.resolved_by = user
+
+                session.commit()
+                return equipment.id_equipment
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al crear el material pendiente en el catálogo",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()

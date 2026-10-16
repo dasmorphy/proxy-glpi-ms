@@ -110,7 +110,7 @@ class FakeReadRepository:
             created_by="dmales",
             updated_by="dmales",
         )
-        return [(management, ticket())]
+        return [(management, ticket(), datetime(2026, 1, 3))]
 
 
 class FakeInspectionRepository:
@@ -289,6 +289,7 @@ class TestInternalManagementUseCase(unittest.TestCase):
         self.assertEqual("Factura", repository.filters["type_management"])
         self.assertEqual("FIN-2026-0010", result[0]["code_management"])
         self.assertEqual(Decimal("100.00"), result[0]["amount_pending"])
+        self.assertEqual(datetime(2026, 1, 3), result[0]["last_followup_at"])
 
     def test_get_inspection_technical_returns_a_list_of_inspections(self):
         repository = FakeInspectionRepository()
