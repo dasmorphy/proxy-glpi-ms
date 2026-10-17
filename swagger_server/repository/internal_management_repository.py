@@ -67,7 +67,11 @@ class InternalManagementRepository:
         return f"INS-{datetime.now().year}-{management_id:04d}"
 
     @staticmethod
-    def _save_sale_quotation(session, inspection_id, quotation, user):
+    def generate_code_quote(sales_code, management_id):
+        return f"{sales_code}-{management_id:04d}"
+
+
+    def save_sale_quotation(self, session, inspection_id, quotation, user, sales_code):
         """Guarda la proforma de la inspección. Si ya existe una se actualiza su
         cabecera y sus items se reemplazan completos con los recibidos."""
         InternalManagementRepository._validate_quotation_quantities(quotation)
@@ -101,8 +105,17 @@ class InternalManagementRepository:
         sale_quotation.iva_rate = quotation.get('iva_rate')
         sale_quotation.subtotal = quotation.get('subtotal')
         sale_quotation.total = quotation.get('total')
+        # Condiciones comerciales que se imprimen en el PDF de la proforma
+        sale_quotation.delivery_time = self._optional_text(quotation.get('delivery_time'))
+        sale_quotation.payment_terms = self._optional_text(quotation.get('payment_terms'))
+        sale_quotation.validity_days = self._validity_days(quotation.get('validity_days'))
         sale_quotation.updated_by = user
         session.flush()
+
+        sale_quotation.quote_number = self.generate_code_quote(
+            sales_code,
+            sale_quotation.id_quote
+        )
 
         for item in quotation.get('items') or []:
             quotation_item = SaleQuotationItem(
@@ -144,6 +157,24 @@ class InternalManagementRepository:
                 ))
 
         return sale_quotation
+
+    @staticmethod
+    def _optional_text(value):
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @staticmethod
+    def _validity_days(value):
+        if value is None or value == "":
+            return None
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            raise CustomAPIException("El campo validity_days debe ser un número entero de días", 400)
+        if days < 0:
+            raise CustomAPIException("El campo validity_days no puede ser negativo", 400)
+        return days
 
     @staticmethod
     def _get_sale_quotations(session, inspection_ids):
@@ -521,7 +552,6 @@ class InternalManagementRepository:
 
                 new_register = CommercialTicketManagement(
                     ticket_id=ticket.id_inspection,
-                    assigned_user=body.get('assigned_user'),
                     origin_id=body.get('origin_id'),
                     type_solution_id=body.get('type_solution_id'),
                     quoted_amount=body.get('quoted_amount'),
@@ -547,11 +577,12 @@ class InternalManagementRepository:
                     new_register.id_management_commercial
                 )
                 if body.get('sale_quotation'):
-                    sale_quotation = self._save_sale_quotation(
+                    sale_quotation = self.save_sale_quotation(
                         session,
                         ticket.id_inspection,
                         body['sale_quotation'],
                         body.get('user'),
+                        body.get('sales_code')
                     )
                     if new_register.status_id == self.COMMERCIAL_STATUS_APPROVED:
                         self._generate_pending_materials(
@@ -651,7 +682,6 @@ class InternalManagementRepository:
 
 
                 for filter_name in (
-                    "assigned_user",
                     "origin_id",
                     "type_solution_id",
                     "status_id",
@@ -764,7 +794,7 @@ class InternalManagementRepository:
                 InspectionTechnical.responsible_name == filters["responsible_id"]
             )
         if filters.get("client_id") is not None:
-            conditions.append(InspectionTechnical.client_id == filters["client_id"])
+            conditions.append(InspectionTechnical.client_id.in_(filters["client_id"]))
         if filters.get("ubication_id") is not None:
             conditions.append(
                 InspectionTechnical.ubication_id == filters["ubication_id"]
@@ -1114,7 +1144,6 @@ class InternalManagementRepository:
                     management,
                     body,
                     {
-                        "assigned_user": "assigned_user",
                         "origin_id": "origin_id",
                         "type_solution_id": "type_solution_id",
                         "quoted_amount": "quoted_amount",
@@ -1136,11 +1165,12 @@ class InternalManagementRepository:
 
                 sale_quotation = None
                 if body.get('sale_quotation'):
-                    sale_quotation = self._save_sale_quotation(
+                    sale_quotation = self.save_sale_quotation(
                         session,
                         ticket.id_inspection,
                         body['sale_quotation'],
                         body.get('user'),
+                        body.get('sales_code')
                     )
 
                 if management.status_id == self.COMMERCIAL_STATUS_APPROVED:
@@ -1233,6 +1263,32 @@ class InternalManagementRepository:
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión financiera",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
+    def assign_sales_user(self, body, internal, external):
+        """Asigna el asesor comercial (sales_user) de la inspección.
+        sales_user solo se llena desde este flujo."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                self._validate_update_body(body, "id_inspection")
+                self._validate_update_body(body, "user")
+                user = str(body.get("user")).strip()
+                if not user:
+                    raise CustomAPIException("El campo user es obligatorio para actualizar el registro", 400)
+
+                inspection = self._get_inspection(session, body.get("id_inspection"))
+                inspection.sales_user = user
+
+                session.commit()
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al asignar el asesor comercial",
                     internal,
                     external,
                 )
@@ -1539,7 +1595,7 @@ class InternalManagementRepository:
                 if filters.get("responsible"):
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible"])
                 if filters.get("client_id") is not None:
-                    conditions.append(InspectionTechnical.client_id == filters["client_id"])
+                    conditions.append(InspectionTechnical.client_id.in_(filters["client_id"]))
                 if filters.get("ubication_id") is not None:
                     conditions.append(InspectionTechnical.ubication_id == filters["ubication_id"])
                 if filters.get("priority"):
@@ -1548,6 +1604,8 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.id_inspection == filters["id_inspection"])
                 if filters.get("responsible_id"):
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
+                if filters.get("sales_user"):
+                    conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
                 if filters.get("pending_technical") == 'true':
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
                     conditions.append(

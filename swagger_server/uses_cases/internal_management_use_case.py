@@ -180,10 +180,12 @@ class InternalManagementUseCase:
             "responsible_id": params.get("responsible_id"),
             "ticket_id": self._optional_int(params.get("ticket_id"), "ticket_id"),
             "responsible": params.get("responsible"),
+            "sales_user": params.get("sales_user", "").strip() or None,
             "pending_technical": params.get("pending_technical"),
             "pending_commercial": params.get("pending_commercial"),
             "ready_for_project": params.get("ready_for_project"),
-            "client_id": self._optional_int(params.get("client_id"), "client_id"),
+            # Acepta uno o varios ids separados por coma: client_id=1,2,3
+            "client_id": self._optional_int_list(params.get("client_id"), "client_id"),
             "ubication_id": self._optional_int(
                 params.get("ubication_id"),
                 "ubication_id",
@@ -208,6 +210,19 @@ class InternalManagementUseCase:
             )
 
     @staticmethod
+    def _optional_int_list(value, field_name):
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            values = [int(item) for item in str(value).split(",") if item.strip()]
+        except (TypeError, ValueError):
+            raise CustomAPIException(
+                f"El parámetro {field_name} debe ser una lista de números enteros separados por coma",
+                400,
+            )
+        return values or None
+
+    @staticmethod
     def _serialize_ticket(ticket: InspectionTechnical):
         return {
             "id_inspection": ticket.id_inspection,
@@ -227,6 +242,7 @@ class InternalManagementUseCase:
             "location_name": ticket.ubication_name,
             "responsible_id": ticket.responsible_id,
             "responsible_name": ticket.responsible_name,
+            "sales_user": ticket.sales_user,
             "created_at": ticket.created_at,
             "updated_at": ticket.updated_at,
             "created_by": ticket.created_by,
@@ -303,7 +319,6 @@ class InternalManagementUseCase:
         filters = self._build_ticket_filters(params, include_status=False)
         filters.update(
             {
-                "assigned_user": params.get("assigned_user"),
                 "ticket_commercial_id": params.get("ticket_commercial_id"),
                 "is_registred": params.get("is_registred"),
                 "pending_financial": params.get("pending_financial"),
@@ -326,7 +341,6 @@ class InternalManagementUseCase:
             {
                 **self._serialize_ticket(ticket),
                 "id_management_commercial": management.id_management_commercial,
-                "assigned_user": management.assigned_user,
                 "code_management": management.code_management,
                 "origin_id": management.origin_id,
                 "origin_name": origin_name,
@@ -403,6 +417,9 @@ class InternalManagementUseCase:
             "iva_rate": self._amount(quotation.iva_rate),
             "iva": self._amount(quotation.iva),
             "total": self._amount(quotation.total),
+            "delivery_time": quotation.delivery_time,
+            "payment_terms": quotation.payment_terms,
+            "validity_days": quotation.validity_days,
         }
 
     def generate_sale_quotation_pdf(self, id_quote, internal, external):
@@ -521,6 +538,13 @@ class InternalManagementUseCase:
             }
             for material, equipment in rows
         ]
+
+    def assign_sales_user(self, body, internal, external):
+        return self.internal_management_repository.assign_sales_user(
+            body,
+            internal,
+            external,
+        )
 
     def approve_technical_inspection(self, body, internal, external):
         return self.internal_management_repository.approve_technical_inspection(

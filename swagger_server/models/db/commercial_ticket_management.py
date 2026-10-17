@@ -24,7 +24,6 @@ class CommercialTicketManagement(Base):
             ondelete="NO ACTION",
         ),
     )
-    assigned_user = Column(Text)
     code_management = Column(Text)
     origin_id = Column(
         Integer,

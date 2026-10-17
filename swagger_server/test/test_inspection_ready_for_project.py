@@ -29,6 +29,7 @@ def inspection(**overrides):
         "ubication_name": "Guayas",
         "responsible_id": None,
         "responsible_name": None,
+        "sales_user": None,
         "created_at": datetime(2026, 1, 1),
         "updated_at": datetime(2026, 1, 2),
         "created_by": "dmales",

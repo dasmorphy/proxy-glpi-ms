@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS internal_management.inspection_technical
     client_id integer,
     ubication_id integer,
     contact text COLLATE pg_catalog."default",
+    sales_user text COLLATE pg_catalog."default",
     code text COLLATE pg_catalog."default",
     next_area text COLLATE pg_catalog."default",
     title_ticket text COLLATE pg_catalog."default",
@@ -274,7 +275,6 @@ ALTER TABLE IF EXISTS internal_management.commmercial_ticket_status
 CREATE TABLE internal_management.commercial_ticket_management
 (
     id_management_commercial integer NOT NULL,
-    assigned_user text,
     code_management text,
     origin_id integer,
     type_solution_id integer,

@@ -41,6 +41,7 @@ class InspectionTechnical(Base):
     priority = Column(Text)
     responsible_id = Column(Uuid)
     responsible_name = Column(Text)
+    sales_user = Column(Text)
 
     created_by = Column(Text)
     updated_by = Column(Text)

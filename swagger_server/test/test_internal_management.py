@@ -70,7 +70,6 @@ class FakeReadRepository:
         self.filters = filters
         management = SimpleNamespace(
             id_management_commercial=9,
-            assigned_user="vendedor",
             code_management="COT-2026-0009",
             origin_id=1,
             type_solution_id=2,
@@ -454,7 +453,6 @@ class TestInternalManagementRepository(unittest.TestCase):
         repository.post_ticket_commercial(
             {
                 "ticket_id": 1234,
-                "assigned_user": "vendedor",
                 "origin_id": 1,
                 "type_solution_id": 2,
                 "quoted_amount": "212.30",

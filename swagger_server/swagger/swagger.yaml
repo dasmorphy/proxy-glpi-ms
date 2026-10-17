@@ -606,12 +606,20 @@ paths:
           schema:
             type: string
             example: dmales
+        - name: sales_user
+          in: query
+          required: false
+          description: Asesor comercial asignado (atributo user).
+          schema:
+            type: string
+            example: dmales
         - name: client_id
           in: query
           required: false
+          description: Uno o varios ids de cliente separados por coma.
           schema:
-            type: integer
-            example: 1
+            type: string
+            example: "1,2,3"
         - name: ubication_id
           in: query
           required: false
@@ -1071,12 +1079,6 @@ paths:
           schema:
             type: boolean
             example: true
-        - name: assigned_user
-          in: query
-          required: false
-          schema:
-            type: string
-            example: dmales
         - name: origin_id
           in: query
           required: false
@@ -1213,15 +1215,16 @@ paths:
                 data:
                   type: string
                   description: >-
-                    JSON en texto con inspection_id, assigned_user, origin_id, type_solution_id,
+                    JSON en texto con inspection_id, origin_id, type_solution_id,
                     quoted_amount, probability_closing, closing_date, next_action,
                     responsible_next_action, requires_technical, requires_material,
                     contract_received, date_finish, reason_loss,
                     observations, status_id, user y opcionalmente sale_quotation
-                    (proforma con client_company, items, subtotal, iva_rate, iva y total;
+                    (proforma con client_company, items, subtotal, iva_rate, iva, total,
+                    delivery_time y payment_terms en texto y validity_days en días (entero);
                     los components de un item con is_bundle=true se guardan como
                     materiales adicionales; los items con is_new o is_labor envían model y description).
-                  example: '{"inspection_id": 1, "assigned_user": "dmales", "origin_id": 1, "type_solution_id": 1, "quoted_amount": 212.30, "probability_closing": 50, "closing_date": "2025-01-21T00:00:00", "next_action": "En proceso", "responsible_next_action": "Comercial", "requires_technical": true, "requires_material": true, "contract_received": true, "date_finish": "2025-02-21T00:00:00", "reason_loss": null, "observations": "Observaciones del ticket", "status_id": 1, "user": "dmales", "sale_quotation": {"client_company": 1, "items": [{"item": 1, "material_id": 152, "quantity": 20, "base_price": 1.09, "profit_margin": 0.3, "profit_margin_dollar": 0.33, "price": 1.42, "total": 28.4, "is_bundle": false, "is_labor": false, "components": []}, {"item": 2, "material_id": null, "quantity": 1, "base_price": 158.48, "profit_margin": 0.259, "profit_margin_dollar": 41.04, "price": 199.52, "total": 199.52, "is_bundle": true, "is_labor": false, "components": [{"material_id": 107, "quantity": 1, "base_price": 93.48, "profit_margin": 0.3, "profit_margin_dollar": 28.04, "total": 121.52}]}], "subtotal": 227.92, "iva_rate": 0.15, "iva": 34.19, "total": 262.11}}'
+                  example: '{"inspection_id": 1, "origin_id": 1, "sales_code": 1, "type_solution_id": 1, "quoted_amount": 212.30, "probability_closing": 50, "closing_date": "2025-01-21T00:00:00", "next_action": "En proceso", "responsible_next_action": "Comercial", "requires_technical": true, "requires_material": true, "contract_received": true, "date_finish": "2025-02-21T00:00:00", "reason_loss": null, "observations": "Observaciones del ticket", "status_id": 1, "user": "dmales", "sale_quotation": {"client_company": 1, "items": [{"item": 1, "material_id": 152, "quantity": 20, "base_price": 1.09, "profit_margin": 0.3, "profit_margin_dollar": 0.33, "price": 1.42, "total": 28.4, "is_bundle": false, "is_labor": false, "components": []}, {"item": 2, "material_id": null, "quantity": 1, "base_price": 158.48, "profit_margin": 0.259, "profit_margin_dollar": 41.04, "price": 199.52, "total": 199.52, "is_bundle": true, "is_labor": false, "components": [{"material_id": 107, "quantity": 1, "base_price": 93.48, "profit_margin": 0.3, "profit_margin_dollar": 28.04, "total": 121.52}]}], "subtotal": 227.92, "iva_rate": 0.15, "iva": 34.19, "total": 262.11, "delivery_time": "15 días laborables", "payment_terms": "50% anticipo, 50% contra entrega", "validity_days": 30}}'
                 files:
                   $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
@@ -1480,6 +1483,72 @@ paths:
                   type: object
                   properties:
                     id_commercial_ticket:
+                      type: integer
+                      example: 1
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+        "503":
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /assign-ticket-commercial:
+    post:
+      tags:
+      - Inspection
+      summary: Asigna el asesor comercial de la inspección.
+      description: Actualiza la columna sales_user de la inspección con el user del asesor seleccionado. Es el único flujo que llena sales_user.
+      operationId: assign_sales_user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  required:
+                  - id_inspection
+                  - user
+                  properties:
+                    id_inspection:
                       type: integer
                       example: 1
                     user:
