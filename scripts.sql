@@ -875,6 +875,7 @@ CREATE TABLE internal_management.financial_followup
     id_followup integer NOT NULL,
     management_financial_id integer,
     observations text,
+    type text,
     created_at timestamp without time zone DEFAULT now(),
     created_by text,
     CONSTRAINT financial_followup_pkey PRIMARY KEY (id_followup),
@@ -1077,3 +1078,20 @@ ALTER SEQUENCE internal_management.material_delivery_detail_id_seq
 
 CREATE INDEX IF NOT EXISTS material_delivery_detail_history_idx
     ON internal_management.material_delivery_detail (history_id);
+
+--------------------------------------------------------------------------------------------------------------------------------------
+
+-- Seguimientos financieros para registros Pendientes (gestiones comerciales sin gestión financiera)
+ALTER TABLE IF EXISTS internal_management.financial_followup
+    ADD COLUMN management_commercial_id integer;
+
+ALTER TABLE IF EXISTS internal_management.financial_followup
+    ADD CONSTRAINT financial_followup_commercial_fkey FOREIGN KEY (management_commercial_id)
+        REFERENCES internal_management.commercial_ticket_management (id_management_commercial) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION;
+
+-- Los seguimientos existentes pertenecen a gestiones financieras registradas
+UPDATE internal_management.financial_followup
+    SET type = 'Registrado'
+    WHERE type IS NULL;

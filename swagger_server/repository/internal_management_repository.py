@@ -45,6 +45,8 @@ from swagger_server.utils.inspection_documents import (
 class InternalManagementRepository:
     COMMERCIAL_STATUS_APPROVED = 5
     COMMERCIAL_STATUS_PENDING = 7
+    FOLLOWUP_TYPE_PENDING = "Pendiente"
+    FOLLOWUP_TYPE_REGISTERED = "Registrado"
 
     def __init__(self):
         self.db_telearseg = PostgreSQLClient("TELEARSEG")
@@ -608,14 +610,26 @@ class InternalManagementRepository:
     def get_ticket_commercial(self, filters, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
-                last_followup = (
-                    select(
-                        CommercialFollowup.management_commercial_id,
-                        func.max(CommercialFollowup.created_at).label("last_followup_at"),
+                if filters.get("pending_financial") == "true":
+                    # Pendientes de financiero: último seguimiento financiero de tipo Pendiente
+                    last_followup = (
+                        select(
+                            FinancialFollowup.management_commercial_id,
+                            func.max(FinancialFollowup.created_at).label("last_followup_at"),
+                        )
+                        .where(FinancialFollowup.type == self.FOLLOWUP_TYPE_PENDING)
+                        .group_by(FinancialFollowup.management_commercial_id)
+                        .subquery()
                     )
-                    .group_by(CommercialFollowup.management_commercial_id)
-                    .subquery()
-                )
+                else:
+                    last_followup = (
+                        select(
+                            CommercialFollowup.management_commercial_id,
+                            func.max(CommercialFollowup.created_at).label("last_followup_at"),
+                        )
+                        .group_by(CommercialFollowup.management_commercial_id)
+                        .subquery()
+                    )
 
                 stmt = (
                     select(
@@ -980,6 +994,7 @@ class InternalManagementRepository:
                         FinancialFollowup.management_financial_id,
                         func.max(FinancialFollowup.created_at).label("last_followup_at"),
                     )
+                    .where(FinancialFollowup.type == self.FOLLOWUP_TYPE_REGISTERED)
                     .group_by(FinancialFollowup.management_financial_id)
                     .subquery()
                 )
@@ -1431,8 +1446,14 @@ class InternalManagementRepository:
                     .order_by(FinancialFollowup.created_at.desc())
                 )
                 
+                if filters.get("type"):
+                    stmt = stmt.where(FinancialFollowup.type == filters["type"])
+
                 if filters.get("id_financial"):
                     stmt = stmt.where(FinancialFollowup.management_financial_id == filters["id_financial"])
+
+                if filters.get("id_commercial"):
+                    stmt = stmt.where(FinancialFollowup.management_commercial_id == filters["id_commercial"])
 
                 if filters.get("user"):
                     stmt = stmt.where(FinancialFollowup.created_by == filters["user"])
@@ -1452,20 +1473,43 @@ class InternalManagementRepository:
     def new_followup_financial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
-                ticket_financial = session.execute(
-                    select(FinancialTicketManagement).where(
-                        FinancialTicketManagement.id_management_financial == body.get("management_financial_id")
+                followup_type = body.get("type")
+
+                if followup_type == self.FOLLOWUP_TYPE_PENDING:
+                    # Pendiente: la gestión financiera aún no existe, se vincula a la comercial
+                    ticket_commercial = session.execute(
+                        select(CommercialTicketManagement).where(
+                            CommercialTicketManagement.id_management_commercial == body.get("management_commercial_id")
+                        )
+                    ).scalar_one_or_none()
+
+                    if ticket_commercial is None:
+                        raise CustomAPIException("Ticket comercial no encontrado", 404)
+
+                    new_followup = FinancialFollowup(
+                        management_commercial_id=body.get("management_commercial_id"),
+                        observations=body.get("observations"),
+                        type=followup_type,
+                        created_by=body.get("user")
                     )
-                ).scalar_one_or_none()
+                elif followup_type == self.FOLLOWUP_TYPE_REGISTERED:
+                    ticket_financial = session.execute(
+                        select(FinancialTicketManagement).where(
+                            FinancialTicketManagement.id_management_financial == body.get("management_financial_id")
+                        )
+                    ).scalar_one_or_none()
 
-                if ticket_financial is None:
-                    raise CustomAPIException("Ticket financiero no encontrado", 404)
+                    if ticket_financial is None:
+                        raise CustomAPIException("Ticket financiero no encontrado", 404)
 
-                new_followup = FinancialFollowup(
-                    management_financial_id=body.get("management_financial_id"),
-                    observations=body.get("observations"),
-                    created_by=body.get("user")
-                )
+                    new_followup = FinancialFollowup(
+                        management_financial_id=body.get("management_financial_id"),
+                        observations=body.get("observations"),
+                        type=followup_type,
+                        created_by=body.get("user")
+                    )
+                else:
+                    raise CustomAPIException("Tipo de seguimiento no válido", 400)
 
                 session.add(new_followup)
                 session.commit()

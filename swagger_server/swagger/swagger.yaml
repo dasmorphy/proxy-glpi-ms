@@ -1798,6 +1798,19 @@ paths:
           schema:
             type: integer
             example: 1
+        - name: id_commercial
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [Pendiente, Registrado]
+            example: Registrado
         - name: user
           in: query
           required: false
@@ -1862,9 +1875,18 @@ paths:
                 data:
                   type: object
                   properties:
-                    financial_management_id:
+                    management_financial_id:
+                      nullable: true
                       type: integer
                       example: 1
+                    management_commercial_id:
+                      nullable: true
+                      type: integer
+                      example: 1
+                    type:
+                      type: string
+                      enum: [Pendiente, Registrado]
+                      example: Registrado
                     observations:
                       nullable: true
                       type: string

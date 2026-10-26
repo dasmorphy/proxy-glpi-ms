@@ -23,6 +23,18 @@ class FinancialFollowup(Base):
         ),
     )
 
+    # Solo para type 'Pendiente': gestión comercial aún sin gestión financiera
+    management_commercial_id = Column(
+        Integer,
+        ForeignKey(
+            "internal_management.commercial_ticket_management.id_management_commercial",
+            onupdate="NO ACTION",
+            ondelete="NO ACTION",
+        ),
+    )
+
     observations = Column(Text)
+    # 'Pendiente' o 'Registrado'
+    type = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     created_by = Column(Text)

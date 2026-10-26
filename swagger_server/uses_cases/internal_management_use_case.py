@@ -740,7 +740,9 @@ class InternalManagementUseCase:
     def get_followup_financial(self, params, internal, external):
         filters = {
             "user": params.get("user"),
-            "id_financial": params.get("id_financial")
+            "id_financial": params.get("id_financial"),
+            "id_commercial": params.get("id_commercial"),
+            "type": params.get("type")
         }
 
         rows = self.internal_management_repository.get_followup_financial(filters, internal, external)
@@ -749,6 +751,8 @@ class InternalManagementUseCase:
             {
                 "id_followup": c.id_followup,
                 "management_financial_id": c.management_financial_id,
+                "management_commercial_id": c.management_commercial_id,
+                "type": c.type,
                 "observations": c.observations,
                 "created_at": c.created_at,
                 "created_by": c.created_by,
