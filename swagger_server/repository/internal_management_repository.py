@@ -1209,11 +1209,11 @@ class InternalManagementRepository:
                     raise CustomAPIException("Gestión comercial no encontrada", 404)
 
                 # Aprobada, perdida, etc. ya no se edita: la proforma aprobada alimenta a bodega
-                if management.status_id != self.COMMERCIAL_STATUS_PENDING:
-                    raise CustomAPIException(
-                        "Solo se puede editar una gestión comercial en estado pendiente",
-                        400,
-                    )
+                # if management.status_id != self.COMMERCIAL_STATUS_PENDING:
+                #     raise CustomAPIException(
+                #         "Solo se puede editar una gestión comercial en estado pendiente",
+                #         400,
+                #     )
 
                 self._apply_fields(
                     management,
