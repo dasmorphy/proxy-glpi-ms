@@ -8,8 +8,10 @@ from sqlalchemy.pool import StaticPool
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db import Base
+from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.models.db.material_delivery_detail import MaterialDeliveryDetail
 from swagger_server.models.db.material_delivery_history import MaterialDeliveryHistory
+from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
 from swagger_server.models.db.pending_material import PendingMaterial
 from swagger_server.models.db.sale_additional_materials import SaleAdditionalMaterials
 from swagger_server.models.db.sale_quotation import SaleQuotation
@@ -17,6 +19,7 @@ from swagger_server.models.db.sale_quotation_item import SaleQuotationItem
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.task_technical_assignments import TaskTechnicalAssignment
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
+from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 from swagger_server.repository.internal_management_repository import (
     InternalManagementRepository,
 )
@@ -26,6 +29,9 @@ from swagger_server.uses_cases.internal_management_use_case import (
 
 
 TABLES = [
+    InspectionTechnical.__table__,
+    TechnicalTicketManagement.__table__,
+    MaterialTechTicket.__table__,
     TaskTechnical.__table__,
     TaskTechnicalAssignment.__table__,
     TechnicalEquipment.__table__,
@@ -63,6 +69,11 @@ def seed(repository):
     materiales varios con un componente."""
     with repository.db_telearseg.session_factory() as session:
         session.add_all([
+            InspectionTechnical(id_inspection=50, code="INS-50", title_ticket="Cámaras",
+                                client_name="Cliente"),
+            InspectionTechnical(id_inspection=60, code="INS-60"),
+            TechnicalTicketManagement(id_management_technical=30, inspection_id=50),
+            TechnicalTicketManagement(id_management_technical=40, inspection_id=60),
             TaskTechnical(id_task=1, inspection_id=50, code="PRY-1"),
             TaskTechnicalAssignment(task_id=1, user="jperez"),
             TechnicalEquipment(id_equipment=100, product="Cámara IP", stock=5),
@@ -257,6 +268,168 @@ class TestMaterialDeliveryRepository(unittest.TestCase):
             )
 
 
+class TestTechnicalPendingMaterials(unittest.TestCase):
+    def setUp(self):
+        self.repository = sqlite_repository()
+        seed(self.repository)
+
+    def session(self):
+        return self.repository.db_telearseg.session_factory()
+
+    def save_technical(self, materials, management_id=30):
+        with self.session() as session:
+            management = session.get(TechnicalTicketManagement, management_id)
+            self.repository._save_technical_materials(session, management, materials, "tecnico")
+            session.commit()
+
+    def save_quotation(self, items, inspection_id=50):
+        with self.session() as session:
+            quotation = self.repository.save_sale_quotation(
+                session, inspection_id, {"items": items}, "ventas", 1
+            )
+            session.commit()
+            return quotation.id_quote
+
+    def technical_material_id(self):
+        with self.session() as session:
+            return session.execute(
+                select(MaterialTechTicket.id_material).where(MaterialTechTicket.material_id.is_(None))
+            ).scalar_one()
+
+    def pendings(self):
+        with self.session() as session:
+            return session.execute(select(PendingMaterial)).scalars().all()
+
+    @staticmethod
+    def new_item(material_tech_ticket_id, quantity=3):
+        return {"item": 1, "material_id": None, "is_new": True, "quantity": quantity,
+                "description": "Soporte - acero", "model": "SP-2", "base_price": 10,
+                "profit_margin": 0.3, "profit_margin_dollar": 3,
+                "material_tech_ticket_id": material_tech_ticket_id}
+
+    def test_new_technical_material_creates_pending_without_proforma(self):
+        self.save_technical([
+            {"material_id": 100, "quantity": 2},
+            {"material_id": None, "other": "Soporte", "material_description": "acero", "quantity": 3},
+        ])
+
+        [pending] = self.pendings()
+        self.assertEqual(50, pending.inspection_id)
+        self.assertEqual(self.technical_material_id(), pending.material_tech_ticket_id)
+        self.assertIsNone(pending.quote_id)
+        self.assertEqual("Soporte", pending.name_material)
+        self.assertEqual("acero", pending.description)
+        self.assertEqual(PendingMaterial.STATUS_PENDING, pending.status)
+
+    def test_technical_edit_keeps_pending_and_removing_material_deletes_it(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+        [before] = self.pendings()
+        material_id = self.technical_material_id()
+
+        self.save_technical([{"id_material": material_id, "material_id": None,
+                              "other": "Soporte reforzado", "quantity": 5}])
+        [after] = self.pendings()
+        self.assertEqual(before.id_pending_material, after.id_pending_material)
+        self.assertEqual("Soporte reforzado", after.name_material)
+        self.assertEqual(5, after.quantity)
+
+        self.save_technical([])
+        self.assertEqual([], self.pendings())
+
+    def test_switching_to_catalog_product_deletes_pending(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+        material_id = self.technical_material_id()
+
+        self.save_technical([{"id_material": material_id, "material_id": 100, "quantity": 3}])
+        self.assertEqual([], self.pendings())
+
+    def test_proforma_without_the_material_marks_it_removed_and_readding_restores_it(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+        material_id = self.technical_material_id()
+
+        self.save_quotation([])
+        [pending] = self.pendings()
+        self.assertEqual(PendingMaterial.STATUS_REMOVED, pending.status)
+
+        self.save_quotation([self.new_item(material_id)])
+        [pending] = self.pendings()
+        self.assertEqual(PendingMaterial.STATUS_PENDING, pending.status)
+
+    def test_approval_links_the_technical_pending_instead_of_duplicating(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 2}])
+        material_id = self.technical_material_id()
+        quote_id = self.save_quotation([self.new_item(material_id, quantity=3)])
+
+        with self.session() as session:
+            InternalManagementRepository._generate_pending_materials(session, quote_id, "ventas")
+            session.commit()
+            item = session.execute(select(SaleQuotationItem)).scalar_one()
+
+        [pending] = self.pendings()
+        self.assertEqual(quote_id, pending.quote_id)
+        self.assertEqual(item.id_item, pending.quotation_item_id)
+        self.assertEqual(material_id, pending.material_tech_ticket_id)
+        self.assertEqual(3, pending.quantity)
+        self.assertEqual("SP-2", pending.model)
+        self.assertEqual(Decimal("10"), pending.base_price)
+
+    def test_resolving_before_proforma_allows_zero_stock_and_updates_technical_and_draft(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+        material_id = self.technical_material_id()
+        self.save_quotation([self.new_item(material_id)])
+        [pending] = self.pendings()
+
+        equipment_id = self.repository.resolve_pending_material(
+            pending.id_pending_material, {"product": "Soporte", "stock": 0, "user": "bodega"},
+            "internal", "external",
+        )
+
+        with self.session() as session:
+            material = session.get(MaterialTechTicket, material_id)
+            item = session.execute(select(SaleQuotationItem)).scalar_one()
+            pending = session.get(PendingMaterial, pending.id_pending_material)
+            equipment = session.get(TechnicalEquipment, equipment_id)
+        self.assertEqual(equipment_id, material.material_id)
+        self.assertEqual(equipment_id, item.material_id)
+        self.assertFalse(item.is_new)
+        self.assertEqual(PendingMaterial.STATUS_CREATED, pending.status)
+        self.assertEqual(0, equipment.stock)
+
+    def test_resolving_a_removed_pending_is_rejected(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+        self.save_quotation([])
+        [pending] = self.pendings()
+
+        with self.assertRaises(CustomAPIException) as error:
+            self.repository.resolve_pending_material(
+                pending.id_pending_material, {"product": "Soporte", "stock": 3},
+                "internal", "external",
+            )
+        self.assertIn("eliminado de la proforma", str(error.exception))
+
+    def test_quotation_rejects_technical_material_of_another_inspection(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}],
+                            management_id=40)
+        material_id = self.technical_material_id()
+
+        with self.assertRaises(CustomAPIException):
+            self.save_quotation([self.new_item(material_id)])
+
+    def test_pending_list_includes_technical_pendings_without_proforma(self):
+        self.save_technical([{"material_id": None, "other": "Soporte", "quantity": 3}])
+
+        rows = self.repository.get_pending_materials({"inspection_id": 50}, "internal", "external")
+        [(pending, quote_number, inspection)] = rows
+        self.assertIsNone(quote_number)
+        self.assertEqual("INS-50", inspection.code)
+
+        result = InternalManagementUseCase(SimpleNamespace(
+            get_pending_materials=lambda *_: rows
+        )).get_pending_materials({"inspection_id": "50"}, "internal", "external")
+        self.assertEqual("Técnico", result[0]["origin"])
+        self.assertEqual("INS-50", result[0]["inspection_code"])
+
+
 class FakeDeliveryRepository:
     def __init__(self):
         self.delivery = None
@@ -267,7 +440,8 @@ class FakeDeliveryRepository:
 
     def get_project_materials(self, task_id, internal, external):
         pending = SimpleNamespace(
-            id_pending_material=9, status="Pendiente", name_material="Soporte", model="SP-1",
+            id_pending_material=9, status="Pendiente", name_material="Soporte",
+            description=None, model="SP-1",
             quantity=Decimal("3.00"), base_price=Decimal("10.00"), profit_margin=Decimal("0.30"),
             profit_margin_dollar=Decimal("3.00"), material_id=None,
         )

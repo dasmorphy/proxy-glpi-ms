@@ -4,13 +4,17 @@ from swagger_server.models.db import Base
 
 
 class PendingMaterial(Base):
-    """Producto nuevo de una proforma aprobada que aún no existe en el catálogo."""
+    """Producto nuevo que aún no existe en el catálogo. Nace en el registro
+    técnico (material_tech_ticket_id) o en la proforma aprobada
+    (quotation_item_id); el del técnico se vincula a la proforma al aprobarse."""
 
     __tablename__ = "pending_material"
     __table_args__ = {"schema": "internal_management"}
 
     STATUS_PENDING = "Pendiente"
     STATUS_CREATED = "Creado"
+    # Producto del técnico que el comercial quitó de la proforma
+    STATUS_REMOVED = "Eliminado de proforma"
 
     id_pending_material = Column(
         Integer,
@@ -19,20 +23,32 @@ class PendingMaterial(Base):
         nullable=False,
     )
 
+    inspection_id = Column(
+        Integer,
+        ForeignKey("internal_management.inspection_technical.id_inspection"),
+        nullable=False,
+    )
+
+    material_tech_ticket_id = Column(
+        Integer,
+        ForeignKey("internal_management.material_tech_ticket.id_material"),
+        unique=True,
+    )
+
+    # Nulos mientras el pendiente del técnico no se vincule a una proforma aprobada
     quote_id = Column(
         Integer,
         ForeignKey("internal_management.sale_quotation.id_quote"),
-        nullable=False,
     )
 
     quotation_item_id = Column(
         Integer,
         ForeignKey("internal_management.sale_quotation_item.id_item"),
-        nullable=False,
         unique=True,
     )
 
     name_material = Column(Text)
+    description = Column(Text)
     model = Column(Text)
     quantity = Column(Numeric(15, 2))
     base_price = Column(Numeric(15, 2))

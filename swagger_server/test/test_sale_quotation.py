@@ -94,7 +94,8 @@ class FakeSession:
         first = self.existing_quotation if is_quotation_select else self.management
         return SimpleNamespace(
             scalar_one_or_none=lambda: self.inspection,
-            scalars=lambda: SimpleNamespace(first=lambda: first),
+            # Sin pendientes del técnico que sincronizar
+            scalars=lambda: SimpleNamespace(first=lambda: first, all=lambda: []),
         )
 
     def add(self, record):

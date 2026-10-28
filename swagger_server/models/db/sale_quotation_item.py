@@ -33,6 +33,12 @@ class SaleQuotationItem(Base):
         ForeignKey("technical.technical_equipment.id_equipment")
     )
 
+    # Material del registro técnico del que proviene el producto nuevo
+    material_tech_ticket_id = Column(
+        Integer,
+        ForeignKey("internal_management.material_tech_ticket.id_material")
+    )
+
     item_number = Column(Integer)
     is_labor = Column(Boolean)
     is_bundle = Column(Boolean)

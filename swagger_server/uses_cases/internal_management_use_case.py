@@ -405,6 +405,7 @@ class InternalManagementUseCase:
                     "is_bundle": bool(item.is_bundle),
                     "is_labor": bool(item.is_labor),
                     "is_new": bool(item.is_new),
+                    "material_tech_ticket_id": item.material_tech_ticket_id,
                     "model": item.model,
                     "description": item.description,
                     "components": [
@@ -836,6 +837,7 @@ class InternalManagementUseCase:
                     "id_pending_material": pending.id_pending_material,
                     "status": pending.status,
                     "name_material": pending.name_material,
+                    "description": pending.description,
                     "model": pending.model,
                     "quantity": self._quantity(pending.quantity),
                     "base_price": self._amount(pending.base_price),
@@ -975,6 +977,7 @@ class InternalManagementUseCase:
         rows = self.internal_management_repository.get_pending_materials(
             {
                 "quote_id": self._optional_int(params.get("quote_id"), "quote_id"),
+                "inspection_id": self._optional_int(params.get("inspection_id"), "inspection_id"),
                 "status": params.get("status"),
             },
             internal,
@@ -983,10 +986,18 @@ class InternalManagementUseCase:
         return [
             {
                 "id_pending_material": pending.id_pending_material,
+                # Técnico: nació en el registro técnico; Proforma: lo agregó el comercial
+                "origin": "Técnico" if pending.material_tech_ticket_id is not None else "Proforma",
+                "inspection_id": pending.inspection_id,
+                "inspection_code": inspection.code,
+                "title_ticket": inspection.title_ticket,
+                "client_name": inspection.client_name,
+                "material_tech_ticket_id": pending.material_tech_ticket_id,
                 "quote_id": pending.quote_id,
                 "quote_number": quote_number,
                 "quotation_item_id": pending.quotation_item_id,
                 "name_material": pending.name_material,
+                "description": pending.description,
                 "model": pending.model,
                 "quantity": self._quantity(pending.quantity),
                 "base_price": self._amount(pending.base_price),
@@ -999,7 +1010,7 @@ class InternalManagementUseCase:
                 "resolved_at": pending.resolved_at,
                 "resolved_by": pending.resolved_by,
             }
-            for pending, quote_number in rows
+            for pending, quote_number, inspection in rows
         ]
 
     def resolve_pending_material(self, id_pending_material, body, internal, external):

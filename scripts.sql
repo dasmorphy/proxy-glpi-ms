@@ -1080,6 +1080,47 @@ CREATE INDEX IF NOT EXISTS material_delivery_detail_history_idx
     ON internal_management.material_delivery_detail (history_id);
 
 --------------------------------------------------------------------------------------------------------------------------------------
+-- PENDIENTES DESDE EL REGISTRO TÉCNICO
+-- Los productos nuevos del registro técnico generan su pendiente al guardarse; al aprobar la proforma
+-- el pendiente se vincula a su ítem. Estados: Pendiente | Creado | Eliminado de proforma
+--------------------------------------------------------------------------------------------------------------------------------------
+
+ALTER TABLE internal_management.pending_material
+    ADD COLUMN IF NOT EXISTS inspection_id integer,
+    ADD COLUMN IF NOT EXISTS material_tech_ticket_id integer,
+    ADD COLUMN IF NOT EXISTS description text,
+    ALTER COLUMN quote_id DROP NOT NULL,
+    ALTER COLUMN quotation_item_id DROP NOT NULL;
+
+UPDATE internal_management.pending_material pending
+SET inspection_id = quotation.inspection_id
+FROM internal_management.sale_quotation quotation
+WHERE quotation.id_quote = pending.quote_id
+  AND pending.inspection_id IS NULL;
+
+ALTER TABLE internal_management.pending_material
+    ALTER COLUMN inspection_id SET NOT NULL,
+    ADD CONSTRAINT pending_material_inspection_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    ADD CONSTRAINT pending_material_tech_ticket_unique UNIQUE (material_tech_ticket_id),
+    ADD CONSTRAINT pending_material_tech_ticket_fkey FOREIGN KEY (material_tech_ticket_id)
+        REFERENCES internal_management.material_tech_ticket (id_material) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS pending_material_inspection_idx
+    ON internal_management.pending_material (inspection_id);
+
+ALTER TABLE internal_management.sale_quotation_item
+    ADD COLUMN IF NOT EXISTS material_tech_ticket_id integer,
+    ADD CONSTRAINT sale_quotation_item_tech_ticket_fkey FOREIGN KEY (material_tech_ticket_id)
+        REFERENCES internal_management.material_tech_ticket (id_material) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE SET NULL;
+
+--------------------------------------------------------------------------------------------------------------------------------------
 
 -- Seguimientos financieros para registros Pendientes (gestiones comerciales sin gestión financiera)
 ALTER TABLE IF EXISTS internal_management.financial_followup

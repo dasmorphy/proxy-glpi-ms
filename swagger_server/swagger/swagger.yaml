@@ -968,7 +968,10 @@ paths:
               properties:
                 data:
                   type: object
-                  description: "inspection_id identifica el ticket; los demás campos del POST son opcionales."
+                  description: >-
+                    inspection_id identifica el ticket; los demás campos del POST son opcionales.
+                    Si se envía materials, cada material existente debe incluir su id_material
+                    para conservarlo (y su pendiente); los que no lleguen se eliminan.
                 channel:
                   type: string
                 externalTransactionId:
@@ -1223,7 +1226,8 @@ paths:
                     (proforma con client_company, items, subtotal, iva_rate, iva, total,
                     delivery_time y payment_terms en texto y validity_days en días (entero);
                     los components de un item con is_bundle=true se guardan como
-                    materiales adicionales; los items con is_new o is_labor envían model y description).
+                    materiales adicionales; los items con is_new o is_labor envían model y description;
+                    los items que provienen del registro técnico envían material_tech_ticket_id).
                   example: '{"inspection_id": 1, "origin_id": 1, "sales_code": 1, "type_solution_id": 1, "quoted_amount": 212.30, "probability_closing": 50, "closing_date": "2025-01-21T00:00:00", "next_action": "En proceso", "responsible_next_action": "Comercial", "requires_technical": true, "requires_material": true, "contract_received": true, "date_finish": "2025-02-21T00:00:00", "reason_loss": null, "observations": "Observaciones del ticket", "status_id": 1, "user": "dmales", "sale_quotation": {"client_company": 1, "items": [{"item": 1, "material_id": 152, "quantity": 20, "base_price": 1.09, "profit_margin": 0.3, "profit_margin_dollar": 0.33, "price": 1.42, "total": 28.4, "is_bundle": false, "is_labor": false, "components": []}, {"item": 2, "material_id": null, "quantity": 1, "base_price": 158.48, "profit_margin": 0.259, "profit_margin_dollar": 41.04, "price": 199.52, "total": 199.52, "is_bundle": true, "is_labor": false, "components": [{"material_id": 107, "quantity": 1, "base_price": 93.48, "profit_margin": 0.3, "profit_margin_dollar": 28.04, "total": 121.52}]}], "subtotal": 227.92, "iva_rate": 0.15, "iva": 34.19, "total": 262.11, "delivery_time": "15 días laborables", "payment_terms": "50% anticipo, 50% contra entrega", "validity_days": 30}}'
                 files:
                   $ref: "#/components/schemas/InspectionDocumentFiles"
@@ -2251,10 +2255,19 @@ paths:
       tags:
       - Material Delivery
       summary: Obtiene los materiales pendientes de crear en el catálogo
-      description: Productos nuevos de proformas aprobadas
+      description: >-
+        Productos nuevos del registro técnico (origin Técnico, se generan al guardarlo)
+        y de proformas aprobadas (origin Proforma). Estados: Pendiente, Creado y
+        Eliminado de proforma (producto del técnico que el comercial quitó de la proforma).
       operationId: get_pending_materials
       parameters:
         - name: quote_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+        - name: inspection_id
           in: query
           required: false
           schema:
@@ -2285,7 +2298,10 @@ paths:
       tags:
       - Material Delivery
       summary: Crea en el catálogo el producto de un material pendiente
-      description: El stock debe ser al menos la cantidad de la proforma; se guarda descontando lo ya entregado con el pendiente
+      description: >-
+        Si el pendiente ya está en una proforma aprobada, el stock debe ser al menos la
+        cantidad de la proforma y se guarda descontando lo ya entregado con el pendiente;
+        si aún no, basta con stock mayor o igual a cero.
       operationId: resolve_pending_material
       parameters:
         - name: id_pending_material
