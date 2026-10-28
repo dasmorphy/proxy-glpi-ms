@@ -409,7 +409,14 @@ class InternalManagementUseCase:
                     "model": item.model,
                     "description": item.description,
                     "components": [
-                        prices(component)
+                        {
+                            **prices(component),
+                            "id_extra": component.id_extra,
+                            "is_new": bool(component.is_new),
+                            "material_tech_ticket_id": component.material_tech_ticket_id,
+                            "model": component.model,
+                            "description": component.description,
+                        }
                         for component in components_by_item.get(item.id_item, [])
                     ],
                 }
@@ -448,9 +455,10 @@ class InternalManagementUseCase:
             if item.is_bundle:
                 label, model = "Materiales varios", model or "M/V"
                 description = ", ".join(
-                    f"{format_quantity(component.quantity)} {product(component.material_id)}"
+                    f"{format_quantity(component.quantity)} {name}"
                     for component in components_by_item.get(item.id_item, [])
-                    if product(component.material_id)
+                    for name in [product(component.material_id) or component.description]
+                    if name
                 )
             elif item.is_labor:
                 label, model = "Mano de obra", model or "M/V"
@@ -857,13 +865,21 @@ class InternalManagementUseCase:
             if item.is_bundle:
                 group = f"Materiales varios (ítem {item.item_number})"
                 for component in components_by_item.get(item.id_item, []):
+                    pending = (
+                        pendings.get(line_key(None, component.id_extra))
+                        if component.material_id is None else None
+                    )
                     materials.append(material_row(
                         None, component.id_extra, component.quantity,
-                        component.material_id, None, None, group,
+                        component.material_id or (pending.material_id if pending else None),
+                        (pending.name_material if pending else None) or component.description,
+                        (pending.model if pending else None) or component.model,
+                        group,
+                        pending,
                     ))
                 continue
 
-            pending = pendings.get(item.id_item) if item.material_id is None else None
+            pending = pendings.get(line_key(item.id_item, None)) if item.material_id is None else None
             materials.append(material_row(
                 item.id_item, None, item.quantity,
                 item.material_id or (pending.material_id if pending else None),
@@ -996,6 +1012,7 @@ class InternalManagementUseCase:
                 "quote_id": pending.quote_id,
                 "quote_number": quote_number,
                 "quotation_item_id": pending.quotation_item_id,
+                "additional_material_id": pending.additional_material_id,
                 "name_material": pending.name_material,
                 "description": pending.description,
                 "model": pending.model,

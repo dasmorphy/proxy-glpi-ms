@@ -5,8 +5,10 @@ from swagger_server.models.db import Base
 
 class PendingMaterial(Base):
     """Producto nuevo que aún no existe en el catálogo. Nace en el registro
-    técnico (material_tech_ticket_id) o en la proforma aprobada
-    (quotation_item_id); el del técnico se vincula a la proforma al aprobarse."""
+    técnico (material_tech_ticket_id) o en la proforma aprobada, como ítem
+    (quotation_item_id) o como componente de materiales varios
+    (additional_material_id); el del técnico se vincula a la proforma al
+    aprobarse. quote_id presente indica que ya está en la proforma aprobada."""
 
     __tablename__ = "pending_material"
     __table_args__ = {"schema": "internal_management"}
@@ -44,6 +46,12 @@ class PendingMaterial(Base):
     quotation_item_id = Column(
         Integer,
         ForeignKey("internal_management.sale_quotation_item.id_item"),
+        unique=True,
+    )
+
+    additional_material_id = Column(
+        Integer,
+        ForeignKey("internal_management.sale_additional_materials.id_extra"),
         unique=True,
     )
 

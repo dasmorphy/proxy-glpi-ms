@@ -1226,8 +1226,10 @@ paths:
                     (proforma con client_company, items, subtotal, iva_rate, iva, total,
                     delivery_time y payment_terms en texto y validity_days en días (entero);
                     los components de un item con is_bundle=true se guardan como
-                    materiales adicionales; los items con is_new o is_labor envían model y description;
-                    los items que provienen del registro técnico envían material_tech_ticket_id).
+                    materiales adicionales; un component sin material_id debe ser un producto nuevo
+                    (is_new=true con model y description); los items con is_new o is_labor envían model
+                    y description; los items y components que provienen del registro técnico envían
+                    material_tech_ticket_id, que no puede repetirse en la proforma).
                   example: '{"inspection_id": 1, "origin_id": 1, "sales_code": 1, "type_solution_id": 1, "quoted_amount": 212.30, "probability_closing": 50, "closing_date": "2025-01-21T00:00:00", "next_action": "En proceso", "responsible_next_action": "Comercial", "requires_technical": true, "requires_material": true, "contract_received": true, "date_finish": "2025-02-21T00:00:00", "reason_loss": null, "observations": "Observaciones del ticket", "status_id": 1, "user": "dmales", "sale_quotation": {"client_company": 1, "items": [{"item": 1, "material_id": 152, "quantity": 20, "base_price": 1.09, "profit_margin": 0.3, "profit_margin_dollar": 0.33, "price": 1.42, "total": 28.4, "is_bundle": false, "is_labor": false, "components": []}, {"item": 2, "material_id": null, "quantity": 1, "base_price": 158.48, "profit_margin": 0.259, "profit_margin_dollar": 41.04, "price": 199.52, "total": 199.52, "is_bundle": true, "is_labor": false, "components": [{"material_id": 107, "quantity": 1, "base_price": 93.48, "profit_margin": 0.3, "profit_margin_dollar": 28.04, "total": 121.52}]}], "subtotal": 227.92, "iva_rate": 0.15, "iva": 34.19, "total": 262.11, "delivery_time": "15 días laborables", "payment_terms": "50% anticipo, 50% contra entrega", "validity_days": 30}}'
                 files:
                   $ref: "#/components/schemas/InspectionDocumentFiles"

@@ -1136,3 +1136,24 @@ ALTER TABLE IF EXISTS internal_management.financial_followup
 UPDATE internal_management.financial_followup
     SET type = 'Registrado'
     WHERE type IS NULL;
+
+--------------------------------------------------------------------------------------------------------------------------------------
+
+-- PRODUCTOS NUEVOS EN MATERIALES VARIOS (ver docs/logica-negocio.md, sección 1)
+ALTER TABLE internal_management.sale_additional_materials
+    ADD COLUMN IF NOT EXISTS is_new boolean,
+    ADD COLUMN IF NOT EXISTS model text,
+    ADD COLUMN IF NOT EXISTS description text,
+    ADD COLUMN IF NOT EXISTS material_tech_ticket_id integer,
+    ADD CONSTRAINT sale_additional_materials_tech_ticket_fkey FOREIGN KEY (material_tech_ticket_id)
+        REFERENCES internal_management.material_tech_ticket (id_material) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE SET NULL;
+
+ALTER TABLE internal_management.pending_material
+    ADD COLUMN IF NOT EXISTS additional_material_id integer,
+    ADD CONSTRAINT pending_material_additional_unique UNIQUE (additional_material_id),
+    ADD CONSTRAINT pending_material_additional_fkey FOREIGN KEY (additional_material_id)
+        REFERENCES internal_management.sale_additional_materials (id_extra) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION;

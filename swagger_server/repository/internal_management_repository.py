@@ -149,10 +149,18 @@ class InternalManagementRepository:
 
             session.flush()
             for component in item.get('components') or []:
+                is_new = bool(component.get('is_new')) and not component.get('material_id')
                 session.add(SaleAdditionalMaterials(
                     sale_quote_id=sale_quotation.id_quote,
                     quotation_item_id=quotation_item.id_item,
                     material_id=component.get('material_id'),
+                    is_new=is_new,
+                    # Solo los productos nuevos traen modelo y descripción
+                    model=self._optional_text(component.get('model')) if is_new else None,
+                    description=self._optional_text(component.get('description')) if is_new else None,
+                    material_tech_ticket_id=(
+                        component.get('material_tech_ticket_id') if is_new else None
+                    ),
                     base_price=component.get('base_price'),
                     profit_margin=component.get('profit_margin'),
                     profit_margin_dollar=component.get('profit_margin_dollar'),
@@ -167,13 +175,24 @@ class InternalManagementRepository:
 
     @staticmethod
     def _validate_quotation_technical_materials(session, inspection_id, quotation):
-        """Los ítems pueden indicar el material del registro técnico del que
-        provienen; debe pertenecer a la misma inspección."""
-        technical_ids = {
-            item.get('material_tech_ticket_id')
-            for item in quotation.get('items') or []
-            if item.get('material_tech_ticket_id') is not None
-        }
+        """Los ítems y los componentes de materiales varios pueden indicar el
+        material del registro técnico del que provienen; debe pertenecer a la
+        misma inspección y aparecer una sola vez en la proforma."""
+        referenced = []
+        for item in quotation.get('items') or []:
+            lines = (item.get('components') or []) if item.get('is_bundle') else [item]
+            referenced.extend(
+                line.get('material_tech_ticket_id')
+                for line in lines
+                if line.get('material_tech_ticket_id') is not None
+            )
+        technical_ids = set(referenced)
+        if len(technical_ids) != len(referenced):
+            repeated = min(i for i in technical_ids if referenced.count(i) > 1)
+            raise CustomAPIException(
+                f"El material técnico {repeated} está repetido en la proforma",
+                400,
+            )
         if not technical_ids:
             return technical_ids
 
@@ -207,7 +226,7 @@ class InternalManagementRepository:
             select(PendingMaterial).where(
                 PendingMaterial.inspection_id == inspection_id,
                 PendingMaterial.material_tech_ticket_id.isnot(None),
-                PendingMaterial.quotation_item_id.is_(None),
+                PendingMaterial.quote_id.is_(None),
                 PendingMaterial.status.in_([
                     PendingMaterial.STATUS_PENDING,
                     PendingMaterial.STATUS_REMOVED,
@@ -2145,6 +2164,13 @@ class InternalManagementRepository:
         for item in quotation.get('items') or []:
             if item.get('is_bundle'):
                 for component in item.get('components') or []:
+                    if not component.get('material_id') and not (
+                        component.get('is_new') and cls._optional_text(component.get('description'))
+                    ):
+                        raise CustomAPIException(
+                            f"Los materiales varios del ítem {item.get('item')} deben ser del catálogo o un producto nuevo con descripción",
+                            400,
+                        )
                     if not cls._is_integer_quantity(component.get('quantity')):
                         raise CustomAPIException(
                             f"Las cantidades de los materiales varios del ítem {item.get('item')} deben ser números enteros",
@@ -2262,6 +2288,11 @@ class InternalManagementRepository:
             .where(SaleQuotationItem.material_tech_ticket_id.in_(material_ids))
             .values(material_tech_ticket_id=None)
         )
+        session.execute(
+            update(SaleAdditionalMaterials)
+            .where(SaleAdditionalMaterials.material_tech_ticket_id.in_(material_ids))
+            .values(material_tech_ticket_id=None)
+        )
         pendings = session.execute(
             select(PendingMaterial).where(
                 PendingMaterial.material_tech_ticket_id.in_(material_ids)
@@ -2269,7 +2300,7 @@ class InternalManagementRepository:
         ).scalars().all()
         for pending in pendings:
             if (
-                pending.quotation_item_id is None
+                pending.quote_id is None
                 and pending.status != PendingMaterial.STATUS_CREATED
             ):
                 session.delete(pending)
@@ -2299,7 +2330,7 @@ class InternalManagementRepository:
             pending = pendings.get(material.id_material)
             editable = (
                 pending is not None
-                and pending.quotation_item_id is None
+                and pending.quote_id is None
                 and pending.status != PendingMaterial.STATUS_CREATED
             )
             if material.material_id is not None:
@@ -2326,20 +2357,24 @@ class InternalManagementRepository:
 
     @staticmethod
     def _generate_pending_materials(session, quote_id, user):
-        """Registra como pendientes los productos nuevos de la proforma aprobada.
-        Si el ítem proviene de un material del técnico, vincula su pendiente en
-        lugar de crear otro. Es idempotente: los ítems que ya tienen pendiente
-        no se duplican."""
+        """Registra como pendientes los productos nuevos de la proforma aprobada:
+        ítems y componentes de materiales varios. Si la línea proviene de un
+        material del técnico, vincula su pendiente en lugar de crear otro. Es
+        idempotente: las líneas que ya tienen pendiente no se duplican."""
+        line_key = InternalManagementRepository.line_key
         inspection_id = session.execute(
             select(SaleQuotation.inspection_id).where(SaleQuotation.id_quote == quote_id)
         ).scalar_one()
-        existing = set(
-            session.execute(
-                select(PendingMaterial.quotation_item_id).where(
-                    PendingMaterial.quote_id == quote_id
-                )
-            ).scalars().all()
-        )
+        existing = {
+            line_key(item_id, additional_id)
+            for item_id, additional_id in session.execute(
+                select(
+                    PendingMaterial.quotation_item_id,
+                    PendingMaterial.additional_material_id,
+                ).where(PendingMaterial.quote_id == quote_id)
+            ).all()
+        }
+
         new_items = session.execute(
             select(SaleQuotationItem).where(
                 SaleQuotationItem.sale_quote_id == quote_id,
@@ -2348,11 +2383,28 @@ class InternalManagementRepository:
                 SaleQuotationItem.material_id.is_(None),
             )
         ).scalars().all()
+        new_components = session.execute(
+            select(SaleAdditionalMaterials).where(
+                SaleAdditionalMaterials.sale_quote_id == quote_id,
+                SaleAdditionalMaterials.is_new.is_(True),
+                SaleAdditionalMaterials.material_id.is_(None),
+            )
+        ).scalars().all()
+
+        # (línea, ítem, componente): el pendiente referencia uno de los dos
+        lines = [
+            (line, item_id, additional_id)
+            for line, item_id, additional_id in (
+                [(item, item.id_item, None) for item in new_items]
+                + [(component, None, component.id_extra) for component in new_components]
+            )
+            if line_key(item_id, additional_id) not in existing
+        ]
 
         technical_ids = {
-            item.material_tech_ticket_id
-            for item in new_items
-            if item.material_tech_ticket_id is not None and item.id_item not in existing
+            line.material_tech_ticket_id
+            for line, _, _ in lines
+            if line.material_tech_ticket_id is not None
         }
         technical = {}
         if technical_ids:
@@ -2361,21 +2413,19 @@ class InternalManagementRepository:
                 for pending in session.execute(
                     select(PendingMaterial).where(
                         PendingMaterial.material_tech_ticket_id.in_(technical_ids),
-                        PendingMaterial.quotation_item_id.is_(None),
+                        PendingMaterial.quote_id.is_(None),
                     )
                 ).scalars().all()
             }
 
         created = []
-        for item in new_items:
-            if item.id_item in existing:
-                continue
-            pending = technical.pop(item.material_tech_ticket_id, None)
+        for line, item_id, additional_id in lines:
+            pending = technical.pop(line.material_tech_ticket_id, None)
             if pending is None:
                 pending = PendingMaterial(
                     inspection_id=inspection_id,
-                    name_material=item.description,
-                    model=item.model,
+                    name_material=line.description,
+                    model=line.model,
                     status=PendingMaterial.STATUS_PENDING,
                     created_by=user,
                 )
@@ -2385,12 +2435,13 @@ class InternalManagementRepository:
 
             # El pendiente queda en la línea aprobada, con su cantidad y precios
             pending.quote_id = quote_id
-            pending.quotation_item_id = item.id_item
-            pending.model = item.model or pending.model
-            pending.quantity = item.quantity
-            pending.base_price = item.base_price
-            pending.profit_margin = item.profit_margin
-            pending.profit_margin_dollar = item.profit_margin_dollar
+            pending.quotation_item_id = item_id
+            pending.additional_material_id = additional_id
+            pending.model = line.model or pending.model
+            pending.quantity = line.quantity
+            pending.base_price = line.base_price
+            pending.profit_margin = line.profit_margin
+            pending.profit_margin_dollar = line.profit_margin_dollar
             created.append(pending)
 
         if created:
@@ -2454,7 +2505,7 @@ class InternalManagementRepository:
                     .order_by(SaleAdditionalMaterials.id_extra)
                 ).scalars().all()
                 pendings = {
-                    pending.quotation_item_id: pending
+                    self.line_key(pending.quotation_item_id, pending.additional_material_id): pending
                     for pending in session.execute(
                         select(PendingMaterial).where(
                             PendingMaterial.quote_id == quotation.id_quote
@@ -2575,7 +2626,7 @@ class InternalManagementRepository:
                     ).scalars().all()
                 }
                 pendings = {
-                    pending.quotation_item_id: pending
+                    self.line_key(pending.quotation_item_id, pending.additional_material_id): pending
                     for pending in session.execute(
                         select(PendingMaterial).where(
                             PendingMaterial.quote_id == quotation.id_quote
@@ -2598,7 +2649,7 @@ class InternalManagementRepository:
                         material_id = item.material_id
                         name = item.description
                         if material_id is None:
-                            pending = pendings.get(item.id_item)
+                            pending = pendings.get(self.line_key(item.id_item, None))
                             if pending is None:
                                 raise CustomAPIException(
                                     f'El producto nuevo "{item.description}" no tiene un pendiente registrado',
@@ -2615,7 +2666,16 @@ class InternalManagementRepository:
                             )
                         approved = component.quantity
                         material_id = component.material_id
-                        name = None
+                        name = component.description
+                        if material_id is None:
+                            pending = pendings.get(self.line_key(None, component.id_extra))
+                            if pending is None:
+                                raise CustomAPIException(
+                                    f'El producto nuevo "{component.description}" no tiene un pendiente registrado',
+                                    400,
+                                )
+                            # Sigue en None mientras el producto no se cree en el catálogo
+                            material_id = pending.material_id
 
                     lines.append({
                         "key": self.line_key(
@@ -2768,7 +2828,7 @@ class InternalManagementRepository:
 
                 stock = data["stock"]
                 # Sin proforma aprobada no hay cantidad comprometida que cubrir
-                if pending.quotation_item_id is not None \
+                if pending.quote_id is not None \
                         and stock < Decimal(str(pending.quantity or 0)):
                     raise CustomAPIException(
                         f"El stock debe ser al menos la cantidad de la proforma ({self._format_quantity(pending.quantity)})",
@@ -2820,17 +2880,19 @@ class InternalManagementRepository:
                         .where(MaterialTechTicket.id_material == pending.material_tech_ticket_id)
                         .values(material_id=equipment.id_equipment)
                     )
-                    if pending.quotation_item_id is None:
-                        # La proforma en borrador deja de tratarlo como producto nuevo
-                        session.execute(
-                            update(SaleQuotationItem)
-                            .where(
-                                SaleQuotationItem.material_tech_ticket_id
-                                == pending.material_tech_ticket_id,
-                                SaleQuotationItem.material_id.is_(None),
+                    if pending.quote_id is None:
+                        # La proforma en borrador deja de tratarlo como producto nuevo,
+                        # sea un ítem o un componente de materiales varios
+                        for model in (SaleQuotationItem, SaleAdditionalMaterials):
+                            session.execute(
+                                update(model)
+                                .where(
+                                    model.material_tech_ticket_id
+                                    == pending.material_tech_ticket_id,
+                                    model.material_id.is_(None),
+                                )
+                                .values(material_id=equipment.id_equipment, is_new=False)
                             )
-                            .values(material_id=equipment.id_equipment, is_new=False)
-                        )
 
                 pending.status = PendingMaterial.STATUS_CREATED
                 pending.material_id = equipment.id_equipment

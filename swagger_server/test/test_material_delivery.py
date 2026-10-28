@@ -112,8 +112,16 @@ class TestQuotationQuantities(unittest.TestCase):
         with self.assertRaises(CustomAPIException):
             InternalManagementRepository._validate_quotation_quantities({
                 "items": [{"item": 1, "is_bundle": True, "quantity": 1,
-                           "components": [{"quantity": 12.5}]}]
+                           "components": [{"material_id": 200, "quantity": 12.5}]}]
             })
+
+    def test_bundle_component_must_be_catalog_or_new_with_description(self):
+        for component in ({"quantity": 1}, {"is_new": True, "description": "  ", "quantity": 1}):
+            with self.assertRaises(CustomAPIException):
+                InternalManagementRepository._validate_quotation_quantities({
+                    "items": [{"item": 1, "is_bundle": True, "quantity": 1,
+                               "components": [component]}]
+                })
 
     def test_labor_and_integer_quantities_are_accepted(self):
         InternalManagementRepository._validate_quotation_quantities({
@@ -121,7 +129,10 @@ class TestQuotationQuantities(unittest.TestCase):
                 {"item": 1, "is_labor": True, "quantity": 1.5},
                 {"item": 2, "quantity": 3},
                 {"item": 3, "quantity": "4.00"},
-                {"item": 4, "is_bundle": True, "quantity": 1, "components": [{"quantity": 2}]},
+                {"item": 4, "is_bundle": True, "quantity": 1, "components": [
+                    {"material_id": 200, "quantity": 2},
+                    {"is_new": True, "description": "Soporte", "quantity": 1},
+                ]},
             ]
         })
 
@@ -430,6 +441,172 @@ class TestTechnicalPendingMaterials(unittest.TestCase):
         self.assertEqual("INS-50", result[0]["inspection_code"])
 
 
+class TestBundleNewProducts(unittest.TestCase):
+    """Productos nuevos dentro de materiales varios: agregados por el comercial
+    o traídos del registro técnico."""
+
+    def setUp(self):
+        self.repository = sqlite_repository()
+        seed(self.repository)
+
+    def session(self):
+        return self.repository.db_telearseg.session_factory()
+
+    def save_technical(self, materials):
+        with self.session() as session:
+            management = session.get(TechnicalTicketManagement, 30)
+            self.repository._save_technical_materials(session, management, materials, "tecnico")
+            session.commit()
+
+    def save_quotation(self, items):
+        with self.session() as session:
+            quotation = self.repository.save_sale_quotation(
+                session, 50, {"items": items}, "ventas", 1
+            )
+            session.commit()
+            return quotation.id_quote
+
+    def approve(self, quote_id):
+        with self.session() as session:
+            created = InternalManagementRepository._generate_pending_materials(
+                session, quote_id, "ventas"
+            )
+            session.commit()
+            return len(created)
+
+    def technical_material_id(self):
+        with self.session() as session:
+            return session.execute(
+                select(MaterialTechTicket.id_material).where(MaterialTechTicket.material_id.is_(None))
+            ).scalar_one()
+
+    def pendings(self):
+        with self.session() as session:
+            return session.execute(select(PendingMaterial)).scalars().all()
+
+    def components(self):
+        with self.session() as session:
+            return session.execute(
+                select(SaleAdditionalMaterials).order_by(SaleAdditionalMaterials.id_extra)
+            ).scalars().all()
+
+    @staticmethod
+    def bundle(*components):
+        return {"item": 1, "is_bundle": True, "quantity": 1, "components": list(components)}
+
+    @staticmethod
+    def new_component(quantity=2, material_tech_ticket_id=None):
+        return {"material_id": None, "is_new": True, "model": "CE-1",
+                "description": "Caja estanca", "quantity": quantity, "base_price": 4,
+                "profit_margin": 0.5, "profit_margin_dollar": 2, "total": 12 * quantity / 2,
+                "material_tech_ticket_id": material_tech_ticket_id}
+
+    def test_new_component_is_saved_and_generates_pending_on_approval(self):
+        quote_id = self.save_quotation([self.bundle(
+            {"material_id": 200, "quantity": 5, "is_new": True, "description": "ignorado"},
+            self.new_component(),
+        )])
+        catalog, new = self.components()
+        self.assertFalse(catalog.is_new)
+        self.assertIsNone(catalog.description)
+        self.assertTrue(new.is_new)
+        self.assertEqual("Caja estanca", new.description)
+
+        self.assertEqual(1, self.approve(quote_id))
+        self.assertEqual(0, self.approve(quote_id))
+
+        [pending] = self.pendings()
+        self.assertEqual(quote_id, pending.quote_id)
+        self.assertIsNone(pending.quotation_item_id)
+        self.assertEqual(new.id_extra, pending.additional_material_id)
+        self.assertEqual("Caja estanca", pending.name_material)
+        self.assertEqual("CE-1", pending.model)
+        self.assertEqual(2, pending.quantity)
+
+    def test_technical_product_in_bundle_links_its_pending(self):
+        self.save_technical([{"material_id": None, "other": "Caja", "quantity": 1}])
+        material_id = self.technical_material_id()
+        quote_id = self.save_quotation([self.bundle(
+            self.new_component(quantity=2, material_tech_ticket_id=material_id),
+        )])
+        [pending] = self.pendings()
+        self.assertEqual(PendingMaterial.STATUS_PENDING, pending.status)
+
+        self.approve(quote_id)
+        [component] = self.components()
+        [pending] = self.pendings()
+        self.assertEqual(material_id, pending.material_tech_ticket_id)
+        self.assertEqual(component.id_extra, pending.additional_material_id)
+        self.assertEqual(2, pending.quantity)
+
+    def test_technical_material_cannot_be_repeated_in_the_proforma(self):
+        self.save_technical([{"material_id": None, "other": "Caja", "quantity": 1}])
+        material_id = self.technical_material_id()
+
+        with self.assertRaises(CustomAPIException) as error:
+            self.save_quotation([
+                {"item": 1, "material_id": None, "is_new": True, "quantity": 1,
+                 "description": "Caja", "material_tech_ticket_id": material_id},
+                {**self.bundle(self.new_component(material_tech_ticket_id=material_id)), "item": 2},
+            ])
+        self.assertIn("repetido", str(error.exception))
+
+    def test_resolving_technical_pending_before_approval_updates_the_component(self):
+        self.save_technical([{"material_id": None, "other": "Caja", "quantity": 1}])
+        material_id = self.technical_material_id()
+        self.save_quotation([self.bundle(
+            self.new_component(material_tech_ticket_id=material_id),
+        )])
+        [pending] = self.pendings()
+
+        equipment_id = self.repository.resolve_pending_material(
+            pending.id_pending_material, {"product": "Caja estanca", "stock": 0, "user": "bodega"},
+            "internal", "external",
+        )
+
+        [component] = self.components()
+        self.assertEqual(equipment_id, component.material_id)
+        self.assertFalse(component.is_new)
+
+    def test_new_component_is_delivered_with_its_pending_and_without_stock(self):
+        quote_id = self.save_quotation([self.bundle(self.new_component(quantity=2))])
+        self.approve(quote_id)
+        [component] = self.components()
+        [pending] = self.pendings()
+
+        self.repository.post_material_delivery(
+            delivery([{"quotation_item_id": None, "additional_material_id": component.id_extra,
+                       "quantity": 2}]),
+            "internal", "external",
+        )
+        with self.assertRaises(CustomAPIException):
+            self.repository.post_material_delivery(
+                delivery([{"quotation_item_id": None, "additional_material_id": component.id_extra,
+                           "quantity": 1}]),
+                "internal", "external",
+            )
+
+        with self.session() as session:
+            detail = session.execute(select(MaterialDeliveryDetail)).scalar_one()
+        self.assertEqual(pending.id_pending_material, detail.pending_material_id)
+        self.assertIsNone(detail.material_id)
+
+        # Con la proforma aprobada el stock debe cubrir la cantidad; descuenta lo entregado
+        with self.assertRaises(CustomAPIException):
+            self.repository.resolve_pending_material(
+                pending.id_pending_material, {"product": "Caja estanca", "stock": 1},
+                "internal", "external",
+            )
+        equipment_id = self.repository.resolve_pending_material(
+            pending.id_pending_material, {"product": "Caja estanca", "stock": 5},
+            "internal", "external",
+        )
+        with self.session() as session:
+            self.assertEqual(3, session.get(TechnicalEquipment, equipment_id).stock)
+            detail = session.execute(select(MaterialDeliveryDetail)).scalar_one()
+        self.assertEqual(equipment_id, detail.material_id)
+
+
 class FakeDeliveryRepository:
     def __init__(self):
         self.delivery = None
@@ -445,6 +622,11 @@ class FakeDeliveryRepository:
             quantity=Decimal("3.00"), base_price=Decimal("10.00"), profit_margin=Decimal("0.30"),
             profit_margin_dollar=Decimal("3.00"), material_id=None,
         )
+        bundle_pending = SimpleNamespace(
+            id_pending_material=10, status="Pendiente", name_material="Caja estanca",
+            description=None, model=None, quantity=Decimal("2.00"), base_price=None,
+            profit_margin=None, profit_margin_dollar=None, material_id=None,
+        )
         return {
             "task": SimpleNamespace(id_task=task_id),
             "quotation": SimpleNamespace(id_quote=10, quote_number="PRF-10"),
@@ -459,9 +641,12 @@ class FakeDeliveryRepository:
                                 is_bundle=True, quantity=Decimal("1.00"), description=None, model=None),
             ],
             "components": [
-                SimpleNamespace(id_extra=7, quotation_item_id=4, material_id=200, quantity=Decimal("20.00")),
+                SimpleNamespace(id_extra=7, quotation_item_id=4, material_id=200, quantity=Decimal("20.00"),
+                                description=None, model=None),
+                SimpleNamespace(id_extra=8, quotation_item_id=4, material_id=None, quantity=Decimal("2.00"),
+                                description="Caja estanca", model=None),
             ],
-            "pendings": {2: pending},
+            "pendings": {("item", 2): pending, ("additional", 8): bundle_pending},
             "equipment": {
                 100: SimpleNamespace(product="Cámara IP", model="CAM", code="C-1", unit="Unid.", stock=5),
                 200: SimpleNamespace(product="Conector RJ45", model=None, code="R-1", unit="Unid.", stock=30),
@@ -489,7 +674,7 @@ class TestMaterialDeliveryUseCase(unittest.TestCase):
         result = self.use_case.get_project_materials(1, "internal", "external")
         materials = {material["key"]: material for material in result["materials"]}
 
-        self.assertEqual(["item-1", "item-2", "additional-7"], list(materials))
+        self.assertEqual(["item-1", "item-2", "additional-7", "additional-8"], list(materials))
         self.assertEqual(1, materials["item-1"]["pending"])
         self.assertEqual(5, materials["item-1"]["stock"])
         self.assertIsNone(materials["item-2"]["stock"])
@@ -497,6 +682,10 @@ class TestMaterialDeliveryUseCase(unittest.TestCase):
         self.assertEqual(9, materials["item-2"]["pending_material"]["id_pending_material"])
         self.assertEqual(0, materials["additional-7"]["pending"])
         self.assertEqual("Materiales varios (ítem 4)", materials["additional-7"]["group"])
+        self.assertFalse(materials["additional-7"]["is_new"])
+        self.assertEqual("Caja estanca", materials["additional-8"]["product"])
+        self.assertIsNone(materials["additional-8"]["stock"])
+        self.assertEqual(10, materials["additional-8"]["pending_material"]["id_pending_material"])
         self.assertEqual([{"user": "jperez", "fullname_user": "Juan Pérez"}], result["technicians"])
         self.assertEqual("Juan Pérez", result["deliveries"][0]["technician_name"])
         self.assertEqual("item-1", result["deliveries"][0]["items"][0]["key"])

@@ -26,7 +26,11 @@ Los **productos nuevos** son productos que todavía no existen en el catálogo
   para que logística pueda crearlo en el catálogo antes de que exista la
   proforma.
 - **Proforma** (`/register-commercial`): el comercial agrega un producto nuevo a
-  mano. El pendiente se genera **al aprobar** la gestión comercial.
+  mano, como ítem suelto o como componente de **materiales varios**. El
+  pendiente se genera **al aprobar** la gestión comercial.
+
+Un producto nuevo del técnico puede cotizarse como ítem suelto o dentro de
+materiales varios, pero en **una sola línea** de la proforma.
 
 Con el pendiente, bodega puede entregar el producto aunque no esté en el
 catálogo y darlo de alta después sin perder la trazabilidad de lo entregado.
@@ -40,18 +44,21 @@ catálogo y darlo de alta después sin perder la trazabilidad de lo entregado.
 |---|---|
 | `inspection_id` | Ticket (inspección) al que pertenece. Siempre presente |
 | `material_tech_ticket_id` | Material del registro técnico que lo originó. **Único**. `NULL` si lo originó la proforma |
-| `quote_id`, `quotation_item_id` | Proforma e ítem aprobados. `NULL` hasta que la proforma se aprueba. `quotation_item_id` es **único** |
+| `quote_id` | Proforma aprobada. `NULL` hasta que se aprueba: es lo que indica si el pendiente ya está **vinculado** |
+| `quotation_item_id` / `additional_material_id` | Línea aprobada: un ítem o un componente de materiales varios (uno de los dos). Ambos **únicos** |
 | `name_material`, `description`, `model`, `quantity`, `base_price`, `profit_margin`, `profit_margin_dollar` | Datos sugeridos. Vienen del técnico y se actualizan con los de la proforma al aprobarse |
 | `status` | `Pendiente`, `Creado` o `Eliminado de proforma` |
 | `material_id` | Producto creado en el catálogo; `NULL` mientras está pendiente |
 | `created_at/by`, `resolved_at/by` | Auditoría |
 
-También `sale_quotation_item.material_tech_ticket_id` guarda de qué material del
-técnico proviene un ítem nuevo de la proforma. Es lo que permite vincular el
-pendiente en lugar de duplicarlo.
+`sale_quotation_item` y `sale_additional_materials` tienen
+`material_tech_ticket_id`, que guarda de qué material del técnico proviene la
+línea nueva. Es lo que permite vincular el pendiente en lugar de duplicarlo.
+Los componentes además tienen `is_new`, `model` y `description` (un componente
+nuevo no tiene `material_id`).
 
-La migración está al final de `scripts.sql` (sección *PENDIENTES DESDE EL
-REGISTRO TÉCNICO*).
+Las migraciones están al final de `scripts.sql` (secciones *PENDIENTES DESDE EL
+REGISTRO TÉCNICO* y *PRODUCTOS NUEVOS EN MATERIALES VARIOS*).
 
 ### Estados
 
@@ -90,9 +97,12 @@ Función: `_save_technical_materials` (la usan `post_ticket_technical` y
 
 Función: `save_sale_quotation`.
 
-- Los ítems pueden enviar `material_tech_ticket_id`. Se valida que pertenezca a
-  la misma inspección (`_validate_quotation_technical_materials`); si no, error
-  400.
+- Los ítems y los componentes pueden enviar `material_tech_ticket_id`.
+  `_validate_quotation_technical_materials` valida que pertenezca a la misma
+  inspección y que no se repita en la proforma; si no, error 400.
+- Un componente de materiales varios sin `material_id` debe ser un producto
+  nuevo (`is_new` con descripción); si no, error 400
+  (`_validate_quotation_quantities`).
 - `_sync_quotation_pendings`: los pendientes del técnico que la proforma no
   incluye pasan a `Eliminado de proforma`, y los que vuelve a incluir regresan a
   `Pendiente`. Solo afecta a los pendientes sin vincular y que no están en
@@ -103,11 +113,13 @@ Función: `save_sale_quotation`.
 Función: `_generate_pending_materials(session, quote_id, user)`. Es
 **idempotente**.
 
-Se procesan los ítems de la proforma con `is_new = True`, `is_labor` distinto de
-`True` y `material_id IS NULL`:
+Se procesan las líneas nuevas de la proforma con `material_id IS NULL`: los
+ítems con `is_new = True` (sin mano de obra) y los componentes de materiales
+varios con `is_new = True`.
 
-- Si el ítem trae `material_tech_ticket_id` y ese pendiente está libre, **se
-  vincula**: se le asignan `quote_id` y `quotation_item_id`, se actualizan
+- Si la línea trae `material_tech_ticket_id` y ese pendiente está libre, **se
+  vincula**: se le asignan `quote_id` y `quotation_item_id` o
+  `additional_material_id`, se actualizan
   cantidad, modelo y precios con los de la proforma, y si estaba en
   `Eliminado de proforma` vuelve a `Pendiente`.
 - Si no, se crea un pendiente nuevo con origen proforma.
@@ -121,7 +133,8 @@ Se procesan los ítems de la proforma con `is_new = True`, `is_labor` distinto d
 
 ### 1.4 Entrega de un producto pendiente
 
-En `post_material_delivery`, si el ítem de la proforma no tiene `material_id`:
+En `post_material_delivery`, si el ítem o el componente de la proforma no tiene
+`material_id`:
 
 - Se busca su pendiente; si no existe, error 400.
 - El detalle se guarda con `pending_material_id` y
@@ -139,16 +152,16 @@ Función: `resolve_pending_material`
 1. Bloquea el pendiente. Debe estar en `Pendiente`: si está en
    `Eliminado de proforma` o en `Creado`, error 400.
 2. Valida el stock:
-   - Con proforma aprobada (`quotation_item_id` presente): stock ≥ cantidad de
-     la proforma.
+   - Con proforma aprobada (`quote_id` presente): stock ≥ cantidad de la
+     proforma.
    - Sin proforma aprobada: stock ≥ 0.
 3. Crea el `TechnicalEquipment` con `stock = stock ingresado − ya entregado`.
 4. Enlaza las entregas previas al producto creado.
 5. Si el pendiente viene del técnico:
    - Actualiza `material_tech_ticket.material_id`. Así, cuando el comercial arme
      la proforma, lo verá como producto del catálogo, con su precio.
-   - Si la proforma todavía no está aprobada, los ítems que lo referencian pasan
-     a `material_id = producto` y `is_new = False`.
+   - Si la proforma todavía no está aprobada, los ítems y componentes que lo
+     referencian pasan a `material_id = producto` y `is_new = False`.
 6. Marca el pendiente como `Creado`.
 
 ### 1.6 Consulta
@@ -157,13 +170,15 @@ Función: `resolve_pending_material`
 `quote_id`, `inspection_id` y `status`. Usa *outer join* con la proforma porque
 los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 `Proforma`), los datos del ticket (`inspection_code`, `title_ticket`,
-`client_name`) y `quote_number`.
+`client_name`), `quote_number` y `additional_material_id`.
 
 ### Front (pw-tickets)
 
 - `register-ticket-technical`: envía `id_material` al editar.
 - `register-ticket-commercial`: conserva y envía `material_tech_ticket_id` en
-  los ítems nuevos que vienen del técnico.
+  los ítems nuevos que vienen del técnico. El modal de materiales varios permite
+  agregar "Material existente", "Producto nuevo" o uno "Del registro técnico";
+  si este ya estaba como ítem suelto, al aplicar se mueve al grupo.
 - `components/modals/pending-product-dialog`: diálogo reutilizable para crear el
   producto. Lo usan el modal de entrega de materiales y la página de pendientes.
 - `pages/tables/pending-materials`: ruta `/productos-pendientes`, en el menú
@@ -173,9 +188,9 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 
 - Solo se puede editar una gestión comercial en estado Pendiente
   (`update_ticket_commercial`). Una vez aprobada, la proforma no cambia.
-- `save_sale_quotation` **borra y recrea** los ítems de la proforma. No es un
-  problema porque los pendientes solo se vinculan a `quotation_item_id` al
-  aprobar, y una gestión aprobada ya no se edita.
+- `save_sale_quotation` **borra y recrea** los ítems y componentes de la
+  proforma. No es un problema porque los pendientes solo se vinculan a sus
+  líneas al aprobar, y una gestión aprobada ya no se edita.
 - El técnico debe enviar `id_material` al editar. Si no lo envía, sus
   materiales se recrean y los pendientes sin vincular se eliminan y se vuelven
   a generar.
@@ -183,4 +198,5 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 ### Tests
 
 `swagger_server/test/test_material_delivery.py`, clases
-`TestMaterialDeliveryRepository` y `TestTechnicalPendingMaterials`.
+`TestMaterialDeliveryRepository`, `TestTechnicalPendingMaterials` y
+`TestBundleNewProducts`.

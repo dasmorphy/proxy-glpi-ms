@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    Boolean,
     Column,
     ForeignKey,
     Integer,
@@ -36,6 +37,17 @@ class SaleAdditionalMaterials(Base):
     material_id = Column(
         Integer,
         ForeignKey("technical.technical_equipment.id_equipment")
+    )
+
+    # Producto nuevo (sin material_id): genera su pendiente de creación al aprobarse
+    is_new = Column(Boolean)
+    model = Column(Text)
+    description = Column(Text)
+
+    # Material del registro técnico del que proviene el producto nuevo
+    material_tech_ticket_id = Column(
+        Integer,
+        ForeignKey("internal_management.material_tech_ticket.id_material")
     )
 
     base_price = Column(Numeric(15, 2))
