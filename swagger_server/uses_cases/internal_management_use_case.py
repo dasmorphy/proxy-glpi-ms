@@ -116,6 +116,7 @@ class InternalManagementUseCase:
             {
                 **self._serialize_ticket(inspection),
                 "project_id": project_id,
+                "description_technical": technical_description,
                 "commercial_status_id": commercial_status_id,
                 "commercial_status": commercial_status,
                 "technical_id": technical_id,
@@ -141,7 +142,7 @@ class InternalManagementUseCase:
                     for document in documents
                 ],
             }
-            for inspection, project_id, commercial_status_id, commercial_status, technical_id, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, documents in rows
+            for inspection, project_id, commercial_status_id, commercial_status, technical_id, technical_description, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, documents in rows
         ]
 
     def get_inspection_document(self, id_document, internal, external):

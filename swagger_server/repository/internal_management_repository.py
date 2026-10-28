@@ -1607,6 +1607,7 @@ class InternalManagementRepository:
                     commercial_status_id.label("commercial_status_id"),
                     commercial_status.label("commercial_status"),
                     TechnicalTicketManagement.id_management_technical.label("technical_id"),
+                    TechnicalTicketManagement.description.label("technical_description"),
                     ClientCompany.identity.label("identity"),
                     ClientCompany.company_name.label("company_name"),
                     ClientCompany.id_company.label("client_company_id"),
