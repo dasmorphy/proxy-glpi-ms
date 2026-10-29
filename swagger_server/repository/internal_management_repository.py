@@ -713,6 +713,7 @@ class InternalManagementRepository:
                         CommercialTypeSolution.name.label("type_solution_name"),
                         CommercialTicketStatus.name.label("status_name"),
                         last_followup.c.last_followup_at,
+                        Users.attributes["fullname"].as_string().label("sales_user_fullname"),
                     )
                     .join(
                         InspectionTechnical,
@@ -739,14 +740,18 @@ class InternalManagementRepository:
                         last_followup.c.management_commercial_id
                         == CommercialTicketManagement.id_management_commercial,
                     )
+                    .outerjoin(
+                        Users,
+                        Users.user == InspectionTechnical.sales_user,
+                    )
                 )
 
                 conditions = self._ticket_conditions(
                     filters,
                     CommercialTicketManagement,
                 )
-
-                fullname = None
+                
+                
 
                 if filters.get("is_registred") == "true":
                     conditions.append(
@@ -772,13 +777,6 @@ class InternalManagementRepository:
 
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
-                    fullname = session.execute(
-                        select(Users.attributes)
-                        .where(Users.user == filters["sales_user"])
-                    ).scalar_one_or_none()
-
-                    fullname = (fullname or {}).get("fullname")
-
 
                 for filter_name in (
                     "origin_id",
@@ -802,7 +800,7 @@ class InternalManagementRepository:
                     session, {row[1].id_inspection for row in rows}
                 )
                 return [
-                    (*row, quotations.get(row[1].id_inspection), fullname)
+                    (*row, quotations.get(row[1].id_inspection))
                     for row in rows
                 ]
             except Exception as exception:
@@ -1684,6 +1682,7 @@ class InternalManagementRepository:
                     ClientCompany.id_company.label("client_company_id"),
                     sale_quote_id.label("sale_quote_id"),
                     sale_quote_total.label("sale_quote_total"),
+                    Users.attributes["fullname"].as_string().label("sales_user_fullname"),
                 ).outerjoin(
                     TaskTechnical,
                     TaskTechnical.inspection_id == InspectionTechnical.id_inspection
@@ -1697,9 +1696,12 @@ class InternalManagementRepository:
                 ).outerjoin(
                     ClientCompany,
                     ClientCompany.id_company == Client.client_company_id
+                ).outerjoin(
+                    Users,
+                    Users.user == InspectionTechnical.sales_user,
                 )
+
                 conditions = []
-                fullname = None
 
                 if filters.get("start_date"):
                     conditions.append(InspectionTechnical.created_at >= filters["start_date"])
@@ -1723,12 +1725,6 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
-                    fullname = session.execute(
-                        select(Users.attributes)
-                        .where(Users.user == filters["sales_user"])
-                    ).scalar_one_or_none()
-
-                    fullname = (fullname or {}).get("fullname")
                 if filters.get("pending_technical") == 'true':
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
                     conditions.append(
@@ -1774,7 +1770,7 @@ class InternalManagementRepository:
                         ).append(document)
 
                 return [
-                    (*row, documents_by_inspection.get(row[0].id_inspection, []), fullname)
+                    (*row, documents_by_inspection.get(row[0].id_inspection, []))
                     for row in rows
                 ]
 
