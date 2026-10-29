@@ -43,11 +43,12 @@ class InternalManagementUseCase:
             external,
         )
 
-    def update_ticket_technical(self, body, internal, external):
+    def update_ticket_technical(self, body, internal, external, files=None):
         return self.internal_management_repository.update_ticket_technical(
             body,
             internal,
             external,
+            files=files,
         )
 
     @staticmethod
@@ -166,11 +167,12 @@ class InternalManagementUseCase:
             body, internal, external, files=files
         )
 
-    def update_ticket_commercial(self, body, internal, external):
+    def update_ticket_commercial(self, body, internal, external, files=None):
         return self.internal_management_repository.update_ticket_commercial(
             body,
             internal,
             external,
+            files=files,
         )
 
 
@@ -271,11 +273,12 @@ class InternalManagementUseCase:
             files=files,
         )
 
-    def update_ticket_financial(self, body, internal, external):
+    def update_ticket_financial(self, body, internal, external, files=None):
         return self.internal_management_repository.update_ticket_financial(
             body,
             internal,
             external,
+            files=files,
         )
 
     def get_ticket_financial(self, headers, params, internal, external):

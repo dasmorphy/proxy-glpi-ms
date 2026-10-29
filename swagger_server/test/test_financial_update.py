@@ -1,6 +1,7 @@
 from decimal import Decimal
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.repository.internal_management_repository import (
@@ -20,6 +21,7 @@ class FakeSession:
             if quotation_total is not None else None
         )
         self.statements = []
+        self.added = []
         self.committed = False
         self.rolled_back = False
 
@@ -45,6 +47,9 @@ class FakeSession:
             scalars=lambda: SimpleNamespace(first=lambda: value),
         )
 
+    def add(self, record):
+        self.added.append(record)
+
     def commit(self):
         self.committed = True
 
@@ -55,10 +60,14 @@ class FakeSession:
         pass
 
 
-def update(session, body):
+def update(session, body, files=None):
     repository = InternalManagementRepository.__new__(InternalManagementRepository)
     repository.db_telearseg = SimpleNamespace(session_factory=lambda: session)
-    repository.update_ticket_financial(body, "internal", "external")
+    repository.update_ticket_financial(body, "internal", "external", files=files)
+
+
+def upload(filename):
+    return SimpleNamespace(filename=filename, mimetype=None)
 
 
 def financial(**fields):
@@ -141,6 +150,51 @@ class TestUpdateTicketFinancial(unittest.TestCase):
 
         self.assertEqual(400, context.exception.status_code)
         self.assertFalse(session.committed)
+
+
+REPOSITORY = "swagger_server.repository.internal_management_repository"
+
+
+class TestUpdateTicketDocuments(unittest.TestCase):
+    """El PUT agrega los documentos recibidos a los de la inspección."""
+
+    def test_documents_are_added_to_the_inspection(self):
+        session = FakeSession(financial())
+
+        with mock.patch(f"{REPOSITORY}.save_document",
+                        side_effect=lambda file, inspection_id: f"docs/{file.filename}"):
+            update(session, {"inspection_id": 7, "id_management_financial": 13},
+                   files=[upload("factura.pdf"), upload("")])
+
+        [document] = session.added
+        self.assertEqual(7, document.inspection_id)
+        self.assertEqual("factura.pdf", document.name_document)
+        self.assertEqual("docs/factura.pdf", document.document_path)
+        self.assertTrue(session.committed)
+
+    def test_invalid_document_type_is_rejected_before_saving(self):
+        session = FakeSession(financial())
+
+        with mock.patch(f"{REPOSITORY}.save_document") as save:
+            with self.assertRaises(CustomAPIException) as context:
+                update(session, {"inspection_id": 7, "id_management_financial": 13},
+                       files=[upload("script.exe")])
+
+        self.assertEqual(400, context.exception.status_code)
+        save.assert_not_called()
+        self.assertFalse(session.committed)
+
+    def test_saved_documents_are_removed_when_the_update_fails(self):
+        session = FakeSession(financial())
+        session.commit = mock.Mock(side_effect=RuntimeError("db"))
+
+        with mock.patch(f"{REPOSITORY}.save_document", return_value="docs/factura.pdf"), \
+                mock.patch(f"{REPOSITORY}.remove_documents") as remove:
+            with self.assertRaises(CustomAPIException):
+                update(session, {"inspection_id": 7, "id_management_financial": 13},
+                       files=[upload("factura.pdf")])
+
+        remove.assert_called_once_with(["docs/factura.pdf"])
 
 
 if __name__ == "__main__":

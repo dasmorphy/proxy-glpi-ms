@@ -1139,9 +1139,14 @@ class InternalManagementRepository:
                     external,
                 )
 
-    def update_ticket_technical(self, body, internal, external):
+    def update_ticket_technical(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
 
@@ -1191,9 +1196,13 @@ class InternalManagementRepository:
                     session.add(new_history_area)
 
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión técnica",
@@ -1203,9 +1212,14 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
-    def update_ticket_commercial(self, body, internal, external):
+    def update_ticket_commercial(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
                 management = self._get_latest_management(
@@ -1279,9 +1293,13 @@ class InternalManagementRepository:
 
                     session.add(new_history_area)
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión comercial",
@@ -1291,9 +1309,14 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
-    def update_ticket_financial(self, body, internal, external):
+    def update_ticket_financial(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
                 if body.get("id_management_financial") is not None:
@@ -1341,9 +1364,13 @@ class InternalManagementRepository:
                 if management.status == "Cobrada":
                     ticket.status = "Finalizado"
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión financiera",
