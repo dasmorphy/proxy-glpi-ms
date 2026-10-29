@@ -1094,6 +1094,12 @@ paths:
           schema:
             type: integer
             example: 1
+        - name: sales_user
+          in: query
+          required: false
+          schema:
+            type: string
+            example: dmales
         - name: status_id
           in: query
           required: false

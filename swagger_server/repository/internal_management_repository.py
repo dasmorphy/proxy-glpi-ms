@@ -746,6 +746,8 @@ class InternalManagementRepository:
                     CommercialTicketManagement,
                 )
 
+                fullname = None
+
                 if filters.get("is_registred") == "true":
                     conditions.append(
                         exists().where(
@@ -767,6 +769,15 @@ class InternalManagementRepository:
 
                 if filters.get("ticket_commercial_id") is not None:
                     conditions.append(CommercialTicketManagement.id_management_commercial == filters["ticket_commercial_id"])
+
+                if filters.get("sales_user"):
+                    conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
+                    fullname = session.execute(
+                        select(Users.attributes)
+                        .where(Users.user == filters["sales_user"])
+                    ).scalar_one_or_none()
+
+                    fullname = (fullname or {}).get("fullname")
 
 
                 for filter_name in (
@@ -791,7 +802,7 @@ class InternalManagementRepository:
                     session, {row[1].id_inspection for row in rows}
                 )
                 return [
-                    (*row, quotations.get(row[1].id_inspection))
+                    (*row, quotations.get(row[1].id_inspection), fullname)
                     for row in rows
                 ]
             except Exception as exception:
@@ -1688,6 +1699,7 @@ class InternalManagementRepository:
                     ClientCompany.id_company == Client.client_company_id
                 )
                 conditions = []
+                fullname = None
 
                 if filters.get("start_date"):
                     conditions.append(InspectionTechnical.created_at >= filters["start_date"])
@@ -1711,6 +1723,12 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
+                    fullname = session.execute(
+                        select(Users.attributes)
+                        .where(Users.user == filters["sales_user"])
+                    ).scalar_one_or_none()
+
+                    fullname = (fullname or {}).get("fullname")
                 if filters.get("pending_technical") == 'true':
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
                     conditions.append(
@@ -1756,7 +1774,7 @@ class InternalManagementRepository:
                         ).append(document)
 
                 return [
-                    (*row, documents_by_inspection.get(row[0].id_inspection, []))
+                    (*row, documents_by_inspection.get(row[0].id_inspection, []), fullname)
                     for row in rows
                 ]
 

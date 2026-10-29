@@ -124,6 +124,7 @@ class InternalManagementUseCase:
                 "identity": identity,
                 "company_name": company_name,
                 "client_company_id": client_company_id,
+                "name_sale_user": fullname,
                 # PDF de la proforma: /sale-quotation/{sale_quote_id}/pdf
                 "sale_quote_id": sale_quote_id,
                 # Total de la proforma: valor facturado de la gestión financiera
@@ -142,7 +143,7 @@ class InternalManagementUseCase:
                     for document in documents
                 ],
             }
-            for inspection, project_id, commercial_status_id, commercial_status, technical_id, technical_description, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, documents in rows
+            for inspection, project_id, commercial_status_id, commercial_status, technical_id, technical_description, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, documents, fullname in rows
         ]
 
     def get_inspection_document(self, id_document, internal, external):
@@ -323,6 +324,7 @@ class InternalManagementUseCase:
                 "ticket_commercial_id": params.get("ticket_commercial_id"),
                 "is_registred": params.get("is_registred"),
                 "pending_financial": params.get("pending_financial"),
+                "sales_user": params.get("sales_user"),
                 "origin_id": self._optional_int(params.get("origin_id"), "origin_id"),
                 "type_solution_id": self._optional_int(
                     params.get("type_solution_id"),
@@ -365,9 +367,10 @@ class InternalManagementUseCase:
                 "created_by": management.created_by,
                 "updated_by": management.updated_by,
                 "last_followup_at": last_followup_at,
+                "name_sale_user": fullname,
                 "sale_quotation": self._serialize_sale_quotation(sale_quotation),
             }
-            for management, ticket, origin_name, type_solution_name, status_name, last_followup_at, sale_quotation in rows
+            for management, ticket, origin_name, type_solution_name, status_name, last_followup_at, sale_quotation, fullname in rows
         ]
 
     @staticmethod
