@@ -411,6 +411,7 @@ class InternalManagementUseCase:
                     "is_bundle": bool(item.is_bundle),
                     "is_labor": bool(item.is_labor),
                     "is_new": bool(item.is_new),
+                    "checked_item": bool(item.checked_item),
                     "material_tech_ticket_id": item.material_tech_ticket_id,
                     "model": item.model,
                     "description": item.description,

@@ -73,6 +73,15 @@ class InternalManagementRepository:
         return f"{sales_code}-{management_id:04d}"
 
 
+    @staticmethod
+    def _quotation_item_key(material_id, material_tech_ticket_id, item_number):
+        """Identifica una línea entre ediciones: id_item cambia al recrearla."""
+        if material_id:
+            return "material", material_id
+        if material_tech_ticket_id:
+            return "technical", material_tech_ticket_id
+        return "item", item_number
+
     def save_sale_quotation(self, session, inspection_id, quotation, user, sales_code):
         """Guarda la proforma de la inspección. Si ya existe una se actualiza su
         cabecera y sus items se reemplazan completos con los recibidos."""
@@ -86,6 +95,7 @@ class InternalManagementRepository:
             .order_by(SaleQuotation.id_quote.desc())
         ).scalars().first()
 
+        previous_checks = {}
         if sale_quotation is None:
             sale_quotation = SaleQuotation(
                 inspection_id=inspection_id,
@@ -93,6 +103,21 @@ class InternalManagementRepository:
             )
             session.add(sale_quotation)
         else:
+            # checked_item es opcional: el item que no lo envíe conserva su valor
+            previous_items = session.execute(
+                select(SaleQuotationItem).where(
+                    SaleQuotationItem.sale_quote_id == sale_quotation.id_quote
+                )
+            ).scalars().all()
+            previous_checks = {
+                self._quotation_item_key(
+                    previous.material_id,
+                    previous.material_tech_ticket_id,
+                    previous.item_number,
+                ): previous.checked_item
+                for previous in previous_items
+            }
+
             # Los componentes referencian a los items: se eliminan primero
             session.execute(
                 delete(SaleAdditionalMaterials).where(
@@ -123,6 +148,15 @@ class InternalManagementRepository:
         )
 
         for item in quotation.get('items') or []:
+            checked_item = item.get('checked_item')
+            if checked_item is None:
+                checked_item = previous_checks.get(
+                    self._quotation_item_key(
+                        item.get('material_id'),
+                        item.get('material_tech_ticket_id'),
+                        item.get('item'),
+                    )
+                )
             quotation_item = SaleQuotationItem(
                 sale_quote_id=sale_quotation.id_quote,
                 material_id=item.get('material_id'),
@@ -142,6 +176,8 @@ class InternalManagementRepository:
                 created_by=user,
                 updated_by=user,
             )
+            if checked_item is not None:
+                quotation_item.checked_item = bool(checked_item)
             session.add(quotation_item)
 
             if not item.get('is_bundle'):

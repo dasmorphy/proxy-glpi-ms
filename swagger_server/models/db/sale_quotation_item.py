@@ -64,3 +64,7 @@ class SaleQuotationItem(Base):
 
     created_by = Column(Text)
     updated_by = Column(Text)
+    checked_item = Column(Boolean)
+
+
+   

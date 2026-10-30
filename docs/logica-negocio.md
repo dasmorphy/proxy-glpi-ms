@@ -192,6 +192,13 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 - `save_sale_quotation` **borra y recrea** los ítems y componentes de la
   proforma. No es un problema porque los pendientes solo se vinculan a sus
   líneas al aprobar, y una gestión aprobada ya no se edita.
+- `checked_item` es opcional en `POST` y `PUT /register-commercial`. Si un ítem
+  no lo envía, `save_sale_quotation` conserva el valor anterior buscando la línea
+  por `material_id`, luego por `material_tech_ticket_id` y por último por
+  `item_number` (mano de obra, materiales varios y productos nuevos a mano); sin
+  coincidencia queda en `false`. Si se reordenan esas últimas líneas, el valor
+  puede quedar en otra línea, y dos líneas con el mismo `material_id` comparten
+  el mismo valor anterior.
 - El técnico debe enviar `id_material` al editar. Si no lo envía, sus
   materiales se recrean y los pendientes sin vincular se eliminan y se vuelven
   a generar.
