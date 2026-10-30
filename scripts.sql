@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS internal_management.inspection_technical
     ubication_id integer,
     contact text COLLATE pg_catalog."default",
     sales_user text COLLATE pg_catalog."default",
+    type text COLLATE pg_catalog."default",
+    start_date timestamp without time zone,
+    end_date timestamp without time zone,
     code text COLLATE pg_catalog."default",
     next_area text COLLATE pg_catalog."default",
     title_ticket text COLLATE pg_catalog."default",
@@ -1164,3 +1167,11 @@ ALTER TABLE internal_management.pending_material
 -- AGREGANDO COLUMNA DE CHECK PARA sale_quotation_item
 ALTER TABLE internal_management.sale_quotation_item
 ADD COLUMN checked_item BOOLEAN DEFAULT FALSE;
+
+
+-- TIPO DE INSPECCIÓN: Inspección | Soporte (ver docs/logica-negocio.md, sección 3)
+-- NULL se trata como Inspección.
+ALTER TABLE internal_management.inspection_technical
+    ADD COLUMN IF NOT EXISTS type text,
+    ADD COLUMN IF NOT EXISTS start_date timestamp without time zone,
+    ADD COLUMN IF NOT EXISTS end_date timestamp without time zone;

@@ -12,6 +12,7 @@ cambian). Salvo que se indique otra cosa, están en
 
 1. [Materiales pendientes de creación](#1-materiales-pendientes-de-creación)
 2. [Documentos de la inspección](#2-documentos-de-la-inspección)
+3. [Tipo de inspección (Soporte)](#3-tipo-de-inspección-soporte)
 
 ---
 
@@ -246,3 +247,54 @@ también al editar.
 ### Tests
 
 `swagger_server/test/test_financial_update.py`, clase `TestUpdateTicketDocuments`.
+
+---
+
+## 3. Tipo de inspección (Soporte)
+
+### Propósito
+
+`inspection_technical.type` distingue una **Inspección** (flujo completo:
+Técnica → Comercial → Proyectos → Financiera) de un **Soporte**, que solo se
+registra en `inspection_technical` y no continúa a las siguientes áreas.
+Valores: `Inspección` | `Soporte`. `NULL` (inspecciones antiguas) se trata
+como Inspección; por eso los filtros usan `_not_support()`
+(`type IS DISTINCT FROM 'Soporte'`) y no `type != 'Soporte'`, que descartaría
+los `NULL`.
+
+### Reglas
+
+- `post_inspection_technical`: `type` se valida con `_inspection_type`
+  (vacío → Inspección; otro valor → 400). Un Soporte queda en
+  `management_area = 'Técnica'` con `next_area = NULL`, aunque llegue con
+  estado "Listo para cotizar" (el estado se guarda, el área no cambia).
+- Un Soporte usa `start_date` y `end_date` en lugar de `commitment_date`:
+  ambas obligatorias y `end_date >= start_date` (`_validate_support_dates`,
+  en POST y PUT, sobre el registro resultante). Las fechas ISO con zona se
+  guardan en UTC sin zona (`_parse_datetime`), igual que `commitment_date`
+  al editar.
+- `update_inspection_technical`: acepta `type`. "Listo para cotizar" no mueve
+  un Soporte a Comercial. Pasar a Soporte da 400 si la inspección ya avanzó
+  (`_inspection_started_flow`: salió de Técnica o tiene registro técnico o
+  comercial). Pasar de Soporte a Inspección se permite y restaura
+  `next_area = 'Comercial'`.
+- `post_ticket_technical` y `post_ticket_commercial` rechazan un Soporte con
+  400 (`_ensure_not_support`).
+- `GET /inspection`: `pending_technical=true` y `pending_commercial=true`
+  excluyen Soporte (también `pending_commercial` de `GET /register-technical`).
+  Filtro opcional `type=Inspección|Soporte`.
+- Dashboard: `_dashboard_inspection_conditions` (fechas + `_not_support()`) lo
+  usan `get_dashboard_counts` y `get_dashboard_area_times`, así que los
+  Soportes no cuentan en pendientes, finalizados, cotizaciones, facturas, SLA
+  ni tiempos por área.
+
+### Front (pw-tickets)
+
+`inspection-form`: dropdown "Tipo" (`Inspección` por defecto). Al editar se carga el
+`type` guardado; si no, el formulario reenviaría `Inspección` y convertiría un Soporte.
+Con Soporte se ocultan "Fecha compromiso" y se muestran "Fecha inicio" y "Fecha fin"
+(obligatorias); al guardar se envía en `null` la fecha que no corresponde al tipo.
+
+### Tests
+
+`swagger_server/test/test_inspection_type.py`.

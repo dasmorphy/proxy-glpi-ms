@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from loguru import logger
@@ -47,6 +47,8 @@ class InternalManagementRepository:
     COMMERCIAL_STATUS_PENDING = 7
     FOLLOWUP_TYPE_PENDING = "Pendiente"
     FOLLOWUP_TYPE_REGISTERED = "Registrado"
+    INSPECTION_TYPE = "Inspección"
+    SUPPORT_TYPE = "Soporte"
 
     def __init__(self):
         self.db_telearseg = PostgreSQLClient("TELEARSEG")
@@ -364,10 +366,18 @@ class InternalManagementRepository:
         with self.db_telearseg.session_factory() as session:
             try:
                 validate_documents(files)
-                current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
-                next_area = "Proyectos" if current_area == "Comercial" else "Comercial"
+                inspection_type = self._inspection_type(body.get("type"))
+                if inspection_type == self.SUPPORT_TYPE:
+                    # Soporte no continúa el flujo: se queda en Técnica
+                    current_area, next_area = "Técnica", None
+                else:
+                    current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
+                    next_area = "Proyectos" if current_area == "Comercial" else "Comercial"
 
                 new_inspection = InspectionTechnical(
+                    type=inspection_type,
+                    start_date=self._parse_datetime(body.get("start_date"), "start_date"),
+                    end_date=self._parse_datetime(body.get("end_date"), "end_date"),
                     management_area=current_area,
                     next_area=next_area,
                     title_ticket=body.get('title_ticket'),
@@ -386,6 +396,7 @@ class InternalManagementRepository:
                     client_name=body.get('client_name'),
                     ubication_name=body.get('ubication_name'),
                 )
+                self._validate_support_dates(new_inspection)
 
 
                 session.add(new_inspection)
@@ -430,6 +441,23 @@ class InternalManagementRepository:
 
                 inspection = self._get_inspection(session, id_inspection)
 
+                if "type" in body:
+                    inspection_type = self._inspection_type(body["type"])
+                    if (
+                        inspection_type == self.SUPPORT_TYPE
+                        and not self._is_support(inspection)
+                        and self._inspection_started_flow(session, inspection)
+                    ):
+                        raise CustomAPIException(
+                            "La inspección ya avanzó en el flujo; no puede cambiarse a Soporte",
+                            400,
+                        )
+                    inspection.type = inspection_type
+                    if inspection_type == self.SUPPORT_TYPE:
+                        inspection.next_area = None
+                    elif inspection.next_area is None and inspection.management_area == "Técnica":
+                        inspection.next_area = "Comercial"
+
                 self._apply_fields(
                     inspection,
                     body,
@@ -446,11 +474,16 @@ class InternalManagementRepository:
                         "ubication_name": "ubication_name",
                     },
                 )
+                for field in ("commitment_date", "start_date", "end_date"):
+                    if field in body:
+                        setattr(inspection, field, self._parse_datetime(body[field], field))
+                self._validate_support_dates(inspection)
                 self._set_updated_by(body, inspection)
 
                 if (
                     body.get("status") == "Listo para cotizar"
                     and inspection.management_area == "Técnica"
+                    and not self._is_support(inspection)
                 ):
                     inspection.management_area = "Comercial"
                     inspection.next_area = "Proyectos"
@@ -489,6 +522,7 @@ class InternalManagementRepository:
 
                 if inspection is None:
                     raise CustomAPIException("Inspección no encontrado", 404)
+                self._ensure_not_support(inspection)
 
                 already_registered = session.execute(
                     select(
@@ -577,6 +611,7 @@ class InternalManagementRepository:
                     conditions.append(
                         InspectionTechnical.status == "Listo para cotizar"
                     )
+                    conditions.append(self._not_support())
 
                     conditions.append(
                         ~exists().where(
@@ -644,7 +679,7 @@ class InternalManagementRepository:
 
                 if ticket is None:
                     raise CustomAPIException("Inspección no encontrada", 404)
-
+                self._ensure_not_support(ticket)
 
                 if body.get('status_id') == 5: 
                     ticket.management_area = 'Proyectos'
@@ -1788,16 +1823,23 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
+                if filters.get("type") == self.SUPPORT_TYPE:
+                    conditions.append(InspectionTechnical.type == self.SUPPORT_TYPE)
+                elif filters.get("type") == self.INSPECTION_TYPE:
+                    conditions.append(self._not_support())
                 if filters.get("pending_technical") == 'true':
-                    # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
+                    # Sin registro técnico asociado (LEFT JOIN sin coincidencia);
+                    # las de Soporte no continúan el flujo
                     conditions.append(
                         TechnicalTicketManagement.id_management_technical.is_(None)
                     )
+                    conditions.append(self._not_support())
 
                 if filters.get("pending_commercial") == 'true':
                     conditions.append(
                         InspectionTechnical.status == "Listo para cotizar"
                     )
+                    conditions.append(self._not_support())
 
                     conditions.append(
                         ~exists().where(
@@ -1849,7 +1891,7 @@ class InternalManagementRepository:
         """Obtiene en una sola consulta todos los conteos del dashboard."""
         with self.db_telearseg.session_factory() as session:
             try:
-                date_conditions = self._inspection_date_conditions(filters)
+                date_conditions = self._dashboard_inspection_conditions(filters)
 
                 def count_inspections(*conditions):
                     return (
@@ -2006,7 +2048,7 @@ class InternalManagementRepository:
                         InspectionTechnical.id_inspection == HistoryAreaTicket.ticket_id,
                     )
                     .outerjoin(finished, finished.c.ticket_id == HistoryAreaTicket.ticket_id)
-                    .where(*self._inspection_date_conditions(filters))
+                    .where(*self._dashboard_inspection_conditions(filters))
                     .subquery()
                 )
                 seconds = func.extract(
@@ -2082,9 +2124,10 @@ class InternalManagementRepository:
                     external,
                 )
 
-    @staticmethod
-    def _inspection_date_conditions(filters):
-        conditions = []
+    @classmethod
+    def _dashboard_inspection_conditions(cls, filters):
+        """Rango de fechas del dashboard; las inspecciones de Soporte no cuentan."""
+        conditions = [cls._not_support()]
         if filters.get("start_date"):
             conditions.append(InspectionTechnical.created_at >= filters["start_date"])
         if filters.get("end_date"):
@@ -2207,6 +2250,80 @@ class InternalManagementRepository:
                     internal,
                     external,
                 )
+
+    @classmethod
+    def _inspection_type(cls, value):
+        """Valida el tipo de inspección; sin valor se asume Inspección."""
+        if value in (None, ""):
+            return cls.INSPECTION_TYPE
+        if value not in (cls.INSPECTION_TYPE, cls.SUPPORT_TYPE):
+            raise CustomAPIException(
+                f"El campo type debe ser {cls.INSPECTION_TYPE} o {cls.SUPPORT_TYPE}", 400
+            )
+        return value
+
+    @staticmethod
+    def _parse_datetime(value, field_name):
+        """ISO 8601 a datetime sin zona (como guarda Postgres un timestamp sin tz)."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value))
+            except ValueError:
+                raise CustomAPIException(
+                    f"El campo {field_name} debe ser una fecha ISO 8601", 400
+                )
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    @classmethod
+    def _validate_support_dates(cls, inspection):
+        """Un Soporte usa fecha inicio y fin en lugar de la fecha compromiso."""
+        if not cls._is_support(inspection):
+            return
+        if inspection.start_date is None or inspection.end_date is None:
+            raise CustomAPIException(
+                "Las inspecciones de soporte requieren start_date y end_date", 400
+            )
+        if inspection.end_date < inspection.start_date:
+            raise CustomAPIException(
+                "La fecha fin no puede ser anterior a la fecha inicio", 400
+            )
+
+    @classmethod
+    def _not_support(cls):
+        # IS DISTINCT FROM para no descartar las inspecciones antiguas con type NULL
+        return InspectionTechnical.type.is_distinct_from(cls.SUPPORT_TYPE)
+
+    @classmethod
+    def _is_support(cls, inspection):
+        return inspection.type == cls.SUPPORT_TYPE
+
+    @classmethod
+    def _ensure_not_support(cls, inspection):
+        if cls._is_support(inspection):
+            raise CustomAPIException(
+                "Las inspecciones de soporte no continúan el flujo", 400
+            )
+
+    @staticmethod
+    def _inspection_started_flow(session, inspection):
+        if inspection.management_area not in (None, "Técnica"):
+            return True
+        return session.execute(
+            select(
+                exists().where(
+                    TechnicalTicketManagement.inspection_id == inspection.id_inspection
+                )
+                | exists().where(
+                    CommercialTicketManagement.ticket_id == inspection.id_inspection
+                )
+            )
+        ).scalar()
 
     @staticmethod
     def _get_inspection(session, inspection_id):

@@ -67,7 +67,7 @@ SALE_QUOTATION = {
 class FakeSession:
     def __init__(self, existing_quotation=None):
         self.inspection = SimpleNamespace(
-            id_inspection=7, management_area="Comercial", next_area=None
+            id_inspection=7, management_area="Comercial", next_area=None, type="Inspección"
         )
         # Solo una gestión en estado pendiente (7) se puede editar
         self.management = SimpleNamespace(updated_by=None, status_id=7)

@@ -552,9 +552,18 @@ paths:
         - name: pending_technical
           in: query
           required: false
+          description: Inspecciones sin registro técnico; excluye las de tipo Soporte.
           schema:
             type: boolean
             example: true
+        - name: type
+          in: query
+          required: false
+          description: >-
+            Filtra por tipo. Inspección incluye las antiguas sin tipo.
+          schema:
+            type: string
+            enum: [Inspección, Soporte]
         - name: start_date
           in: query
           required: false
@@ -694,8 +703,11 @@ paths:
                     JSON en texto con los campos de la inspección: client_id, ubication_id,
                     client_name, ubication_name, contact, case_type, priority, responsible_id,
                     responsible_name, management_status, title_ticket, commitment_date,
-                    status, user.
-                  example: '{"client_id": 1, "ubication_id": 1, "client_name": "TELEARGEG", "ubication_name": "GUAYAS", "contact": "Daniel", "case_type": "Cotización", "priority": "Alta", "responsible_id": "fcea920f-7412-b5da-7be0-cf42b8c93759", "responsible_name": "Daniel", "management_status": "En proceso", "title_ticket": "Propuesta zentinel", "commitment_date": "2024-06-01T12:00:00Z", "status": "En proceso", "user": "dmales"}'
+                    status, user, type ("Inspección" por defecto o "Soporte"; Soporte
+                    se queda en Técnica y no continúa a las siguientes áreas),
+                    start_date y end_date (obligatorias para Soporte, en lugar de
+                    commitment_date; end_date no puede ser anterior a start_date).
+                  example: '{"client_id": 1, "ubication_id": 1, "client_name": "TELEARGEG", "ubication_name": "GUAYAS", "contact": "Daniel", "case_type": "Cotización", "priority": "Alta", "responsible_id": "fcea920f-7412-b5da-7be0-cf42b8c93759", "responsible_name": "Daniel", "management_status": "En proceso", "title_ticket": "Propuesta zentinel", "commitment_date": "2024-06-01T12:00:00Z", "status": "En proceso", "user": "dmales", "type": "Inspección"}'
                 files:
                   $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
@@ -793,6 +805,29 @@ paths:
                     status:
                       type: string
                       example: Listo para cotizar
+                    type:
+                      type: string
+                      enum: [Inspección, Soporte]
+                      description: >-
+                        Solo puede pasar a Soporte si la inspección no avanzó en el
+                        flujo (sin registro técnico ni comercial).
+                    commitment_date:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      example: "2026-10-30T13:00:00Z"
+                    start_date:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      description: Fecha inicio del soporte (obligatoria si type es Soporte).
+                      example: "2026-10-30T13:00:00Z"
+                    end_date:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      description: Fecha fin del soporte (obligatoria si type es Soporte).
+                      example: "2026-10-31T13:00:00Z"
                     user:
                       type: string
                       example: dmales

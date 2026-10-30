@@ -188,6 +188,7 @@ class InternalManagementUseCase:
             "pending_technical": params.get("pending_technical"),
             "pending_commercial": params.get("pending_commercial"),
             "ready_for_project": params.get("ready_for_project"),
+            "type": params.get("type"),
             # Acepta uno o varios ids separados por coma: client_id=1,2,3
             "client_id": self._optional_int_list(params.get("client_id"), "client_id"),
             "ubication_id": self._optional_int(
@@ -230,12 +231,15 @@ class InternalManagementUseCase:
     def _serialize_ticket(ticket: InspectionTechnical):
         return {
             "id_inspection": ticket.id_inspection,
+            "type": ticket.type,
             "management_area": ticket.management_area,
             "next_area": ticket.next_area,
             "title_ticket": ticket.title_ticket,
             "status": ticket.status,
             "contact": ticket.contact,
             "commitment_date": ticket.commitment_date,
+            "start_date": ticket.start_date,
+            "end_date": ticket.end_date,
             "code": ticket.code,
             # "management_status": ticket.management_status,
             "case_type": ticket.case_type,
