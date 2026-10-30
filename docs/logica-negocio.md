@@ -11,6 +11,7 @@ cambian). Salvo que se indique otra cosa, están en
 ## Índice
 
 1. [Materiales pendientes de creación](#1-materiales-pendientes-de-creación)
+2. [Documentos de la inspección](#2-documentos-de-la-inspección)
 
 ---
 
@@ -207,3 +208,41 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 `swagger_server/test/test_material_delivery.py`, clases
 `TestMaterialDeliveryRepository`, `TestTechnicalPendingMaterials` y
 `TestBundleNewProducts`.
+
+---
+
+## 2. Documentos de la inspección
+
+### Propósito
+
+Los archivos adjuntos se guardan **por inspección** (no por gestión), en
+`internal_management.inspection_documents`, y se ven juntos en el detalle del
+ticket.
+
+### Cómo se reciben
+
+| Endpoint | Formato | Comportamiento |
+|---|---|---|
+| `POST /inspection`, `POST /register-technical`, `POST /register-commercial`, `POST /register-financial` | `multipart/form-data` (`data` en JSON como texto + `files`) | Guarda la gestión y sus documentos |
+| `PUT /register-technical`, `PUT /register-commercial`, `PUT /register-financial` | `application/json` o `multipart/form-data` (mismos campos) | Actualiza la gestión y **agrega** los documentos recibidos; los existentes no se modifican ni eliminan |
+
+- En el controlador, el POST usa `_post_with_documents` y el PUT usa
+  `_update_ticket_management`. Los dos leen el multipart con
+  `_parse_multipart_request`.
+- En Connexion 2, `application/json` debe declararse **primero** en el
+  `requestBody` de los PUT. Si no, las peticiones JSON fallan.
+- `validate_documents` rechaza las extensiones no permitidas (400) antes de
+  escribir nada.
+- `_save_inspection_documents` escribe los archivos dentro de la misma
+  transacción. Si la transacción falla, `remove_documents` borra los archivos
+  ya escritos.
+
+### Front (pw-tickets)
+
+`glpi.service.ts`: `save*` y `updateTicket*` envían `buildMultipart(data, files)`.
+Los formularios técnico, comercial y financiero muestran `app-document-upload`
+también al editar.
+
+### Tests
+
+`swagger_server/test/test_financial_update.py`, clase `TestUpdateTicketDocuments`.

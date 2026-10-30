@@ -976,6 +976,23 @@ paths:
                   type: string
                 externalTransactionId:
                   type: string
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: string
+                  description: >-
+                    El mismo JSON de data, en texto. Los files se agregan a los
+                    documentos de la inspección; los existentes no se modifican.
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
       responses:
         "200":
           description: Registro actualizado
@@ -1201,6 +1218,23 @@ paths:
                   type: string
                 externalTransactionId:
                   type: string
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: string
+                  description: >-
+                    El mismo JSON de data, en texto. Los files se agregan a los
+                    documentos de la inspección; los existentes no se modifican.
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
       responses:
         "200":
           description: Registro actualizado
@@ -1408,6 +1442,23 @@ paths:
                 data:
                   type: object
                   description: "inspection_id identifica la inspección; id_management_financial (opcional) la gestión a editar, si no se envía se edita la última. Los demás campos del POST son opcionales."
+                channel:
+                  type: string
+                externalTransactionId:
+                  type: string
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: string
+                  description: >-
+                    El mismo JSON de data, en texto. Los files se agregan a los
+                    documentos de la inspección; los existentes no se modifican.
+                files:
+                  $ref: "#/components/schemas/InspectionDocumentFiles"
                 channel:
                   type: string
                 externalTransactionId:

@@ -749,6 +749,7 @@ class InternalManagementRepository:
                         CommercialTypeSolution.name.label("type_solution_name"),
                         CommercialTicketStatus.name.label("status_name"),
                         last_followup.c.last_followup_at,
+                        Users.attributes["fullname"].as_string().label("sales_user_fullname"),
                     )
                     .join(
                         InspectionTechnical,
@@ -775,14 +776,18 @@ class InternalManagementRepository:
                         last_followup.c.management_commercial_id
                         == CommercialTicketManagement.id_management_commercial,
                     )
+                    .outerjoin(
+                        Users,
+                        Users.user == InspectionTechnical.sales_user,
+                    )
                 )
 
                 conditions = self._ticket_conditions(
                     filters,
                     CommercialTicketManagement,
                 )
-
-                fullname = None
+                
+                
 
                 if filters.get("is_registred") == "true":
                     conditions.append(
@@ -808,13 +813,6 @@ class InternalManagementRepository:
 
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
-                    fullname = session.execute(
-                        select(Users.attributes)
-                        .where(Users.user == filters["sales_user"])
-                    ).scalar_one_or_none()
-
-                    fullname = (fullname or {}).get("fullname")
-
 
                 for filter_name in (
                     "origin_id",
@@ -838,7 +836,7 @@ class InternalManagementRepository:
                     session, {row[1].id_inspection for row in rows}
                 )
                 return [
-                    (*row, quotations.get(row[1].id_inspection), fullname)
+                    (*row, quotations.get(row[1].id_inspection))
                     for row in rows
                 ]
             except Exception as exception:
@@ -1177,9 +1175,14 @@ class InternalManagementRepository:
                     external,
                 )
 
-    def update_ticket_technical(self, body, internal, external):
+    def update_ticket_technical(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
 
@@ -1229,9 +1232,13 @@ class InternalManagementRepository:
                     session.add(new_history_area)
 
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión técnica",
@@ -1241,9 +1248,14 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
-    def update_ticket_commercial(self, body, internal, external):
+    def update_ticket_commercial(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
                 management = self._get_latest_management(
@@ -1317,9 +1329,13 @@ class InternalManagementRepository:
 
                     session.add(new_history_area)
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión comercial",
@@ -1329,9 +1345,14 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
-    def update_ticket_financial(self, body, internal, external):
+    def update_ticket_financial(self, body, internal, external, files=None):
+        """Los documentos recibidos se agregan a los de la inspección; los
+        existentes no se modifican."""
+        files = clean_files(files)
+        saved_paths = []
         with self.db_telearseg.session_factory() as session:
             try:
+                validate_documents(files)
                 self._validate_update_body(body, "inspection_id")
                 ticket = self._get_inspection(session, body.get("inspection_id"))
                 if body.get("id_management_financial") is not None:
@@ -1379,9 +1400,13 @@ class InternalManagementRepository:
                 if management.status == "Cobrada":
                     ticket.status = "Finalizado"
 
+                self._save_inspection_documents(
+                    session, ticket.id_inspection, files, saved_paths
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
+                remove_documents(saved_paths)
                 self._raise_database_error(
                     exception,
                     "Error al actualizar la gestión financiera",
@@ -1720,6 +1745,7 @@ class InternalManagementRepository:
                     ClientCompany.id_company.label("client_company_id"),
                     sale_quote_id.label("sale_quote_id"),
                     sale_quote_total.label("sale_quote_total"),
+                    Users.attributes["fullname"].as_string().label("sales_user_fullname"),
                 ).outerjoin(
                     TaskTechnical,
                     TaskTechnical.inspection_id == InspectionTechnical.id_inspection
@@ -1733,9 +1759,12 @@ class InternalManagementRepository:
                 ).outerjoin(
                     ClientCompany,
                     ClientCompany.id_company == Client.client_company_id
+                ).outerjoin(
+                    Users,
+                    Users.user == InspectionTechnical.sales_user,
                 )
+
                 conditions = []
-                fullname = None
 
                 if filters.get("start_date"):
                     conditions.append(InspectionTechnical.created_at >= filters["start_date"])
@@ -1759,12 +1788,6 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
-                    fullname = session.execute(
-                        select(Users.attributes)
-                        .where(Users.user == filters["sales_user"])
-                    ).scalar_one_or_none()
-
-                    fullname = (fullname or {}).get("fullname")
                 if filters.get("pending_technical") == 'true':
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia)
                     conditions.append(
@@ -1810,7 +1833,7 @@ class InternalManagementRepository:
                         ).append(document)
 
                 return [
-                    (*row, documents_by_inspection.get(row[0].id_inspection, []), fullname)
+                    (*row, documents_by_inspection.get(row[0].id_inspection, []))
                     for row in rows
                 ]
 

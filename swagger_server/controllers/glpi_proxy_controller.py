@@ -161,36 +161,45 @@ class GlpiProxyView(MethodView):
         )
 
     def _update_ticket_management(self, function_name, update_method):
+        """Acepta JSON ({data, channel, externalTransactionId}) o
+        multipart/form-data con los mismos campos más files: los documentos se
+        agregan a los de la inspección."""
         internal_process = (None, None)
         response = {}
         status_code = 500
         try:
+            start_time = default_timer()
+            internal_transaction_id = str(generate_internal_transaction_id())
             if connexion.request.is_json:
-                body = connexion.request.get_json()
-                start_time = default_timer()
-                internal_transaction_id = str(generate_internal_transaction_id())
+                body = connexion.request.get_json() or {}
                 external_transaction_id = body.get("externalTransactionId")
-                internal_process = (internal_transaction_id, external_transaction_id)
-                response["internal_transaction_id"] = internal_transaction_id
-                response["external_transaction_id"] = external_transaction_id
-                logger.info(
-                    f"start request: {function_name}, channel: {body.get('channel')}",
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                update_method(
-                    body.get("data"),
-                    internal_transaction_id,
-                    external_transaction_id,
-                )
-                response["error_code"] = 0
-                response["message"] = "Registro actualizado correctamente"
-                logger.info(
-                    f"Fin de la transacción, procesada en : {default_timer() - start_time} milisegundos",
-                    internal=internal_transaction_id,
-                    external=external_transaction_id,
-                )
-                status_code = 200
+                channel = body.get("channel")
+                data = body.get("data")
+                files = []
+            else:
+                external_transaction_id, channel, data, files = self._parse_multipart_request()
+            internal_process = (internal_transaction_id, external_transaction_id)
+            response["internal_transaction_id"] = internal_transaction_id
+            response["external_transaction_id"] = external_transaction_id
+            logger.info(
+                f"start request: {function_name}, channel: {channel}",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            update_method(
+                data,
+                internal_transaction_id,
+                external_transaction_id,
+                files=files,
+            )
+            response["error_code"] = 0
+            response["message"] = "Registro actualizado correctamente"
+            logger.info(
+                f"Fin de la transacción, procesada en : {default_timer() - start_time} milisegundos",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            status_code = 200
         except Exception as ex:
             response, status_code = CustomAPIException.check_exception(
                 ex,
@@ -200,7 +209,7 @@ class GlpiProxyView(MethodView):
 
         return response, status_code
 
-    def put_ticket_technical(self, body=None):
+    def put_ticket_technical(self, body=None, **kwargs):
         return self._update_ticket_management(
             "put_ticket_technical",
             self.internal_management_use_case.update_ticket_technical,
@@ -243,7 +252,7 @@ class GlpiProxyView(MethodView):
             self.internal_management_use_case.post_ticket_commercial,
         )
 
-    def put_ticket_commercial(self, body=None):
+    def put_ticket_commercial(self, body=None, **kwargs):
         return self._update_ticket_management(
             "put_ticket_commercial",
             self.internal_management_use_case.update_ticket_commercial,
@@ -462,7 +471,7 @@ class GlpiProxyView(MethodView):
             self.internal_management_use_case.post_ticket_financial,
         )
 
-    def put_ticket_financial(self, body=None):
+    def put_ticket_financial(self, body=None, **kwargs):
         return self._update_ticket_management(
             "put_ticket_financial",
             self.internal_management_use_case.update_ticket_financial,
