@@ -318,6 +318,51 @@ class TestTechnicalPendingMaterials(unittest.TestCase):
                 "profit_margin": 0.3, "profit_margin_dollar": 3,
                 "material_tech_ticket_id": material_tech_ticket_id}
 
+    def checked_items(self):
+        with self.session() as session:
+            items = session.execute(select(SaleQuotationItem)).scalars().all()
+            # Como en la respuesta: sin valor (SQLite no tiene el DEFAULT) es false
+            return {item.item_number: bool(item.checked_item) for item in items}
+
+    def test_checked_item_defaults_to_false(self):
+        self.save_quotation([{"item": 1, "material_id": 100, "quantity": 1}])
+
+        self.assertEqual({1: False}, self.checked_items())
+
+    def test_checked_item_is_saved_when_sent(self):
+        self.save_quotation([
+            {"item": 1, "material_id": 100, "quantity": 1, "checked_item": True},
+        ])
+
+        self.assertEqual({1: True}, self.checked_items())
+
+    def test_checked_item_is_kept_on_edit_when_not_sent(self):
+        self.save_quotation([
+            {"item": 1, "material_id": 100, "quantity": 1, "checked_item": True},
+            {"item": 2, "material_id": None, "is_labor": True, "quantity": 1, "checked_item": True},
+            {"item": 3, "material_id": 200, "quantity": 1},
+        ])
+
+        # El producto del catálogo cambia de línea y conserva su valor
+        self.save_quotation([
+            {"item": 1, "material_id": 200, "quantity": 1},
+            {"item": 2, "material_id": None, "is_labor": True, "quantity": 1},
+            {"item": 3, "material_id": 100, "quantity": 2},
+        ])
+
+        self.assertEqual({1: False, 2: True, 3: True}, self.checked_items())
+
+    def test_checked_item_sent_on_edit_replaces_previous_value(self):
+        self.save_quotation([
+            {"item": 1, "material_id": 100, "quantity": 1, "checked_item": True},
+        ])
+
+        self.save_quotation([
+            {"item": 1, "material_id": 100, "quantity": 1, "checked_item": False},
+        ])
+
+        self.assertEqual({1: False}, self.checked_items())
+
     def test_new_technical_material_creates_pending_without_proforma(self):
         self.save_technical([
             {"material_id": 100, "quantity": 2},

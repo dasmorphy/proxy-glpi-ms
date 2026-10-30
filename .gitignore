@@ -67,3 +67,9 @@ target/
 
 # Documentos subidos de las inspecciones
 inspection-documents/
+
+
+.claude
+CLAUDE.local.md
+.claude/settings.local.json
+CLAUDE.md

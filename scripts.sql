@@ -1157,3 +1157,10 @@ ALTER TABLE internal_management.pending_material
         REFERENCES internal_management.sale_additional_materials (id_extra) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE NO ACTION;
+
+
+
+
+-- AGREGANDO COLUMNA DE CHECK PARA sale_quotation_item
+ALTER TABLE internal_management.sale_quotation_item
+ADD COLUMN checked_item BOOLEAN DEFAULT FALSE;
