@@ -145,7 +145,7 @@ class TestInspectionType(unittest.TestCase):
         inspection = create(self.repository)
 
         self.repository.update_inspection_technical(
-            inspection.id_inspection, {"commitment_date": "2026-11-05T05:00:00Z"}, "i", "e"
+            inspection.id_inspection, {"commitment_date": "2026-11-05T05:00:00.000Z"}, "i", "e"
         )
 
         with self.repository.db_telearseg.session_factory() as session:

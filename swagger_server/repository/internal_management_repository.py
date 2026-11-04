@@ -2270,8 +2270,12 @@ class InternalManagementRepository:
         if isinstance(value, datetime):
             parsed = value
         else:
+            text = str(value).strip()
+            # Python 3.10 (imagen de prod) no acepta el sufijo Z de JavaScript
+            if text.endswith(("Z", "z")):
+                text = text[:-1] + "+00:00"
             try:
-                parsed = datetime.fromisoformat(str(value))
+                parsed = datetime.fromisoformat(text)
             except ValueError:
                 raise CustomAPIException(
                     f"El campo {field_name} debe ser una fecha ISO 8601", 400
