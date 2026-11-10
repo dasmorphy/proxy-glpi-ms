@@ -188,7 +188,9 @@ class InternalManagementUseCase:
             "pending_technical": params.get("pending_technical"),
             "pending_commercial": params.get("pending_commercial"),
             "ready_for_project": params.get("ready_for_project"),
-            "type": params.get("type"),
+            "pending_approve_support": params.get("pending_approve_support"),
+            # Acepta varios tipos: type=Soporte&type=Asistencia (o separados por coma)
+            "type": self._optional_str_list(params, "type"),
             # Acepta uno o varios ids separados por coma: client_id=1,2,3
             "client_id": self._optional_int_list(params.get("client_id"), "client_id"),
             "ubication_id": self._optional_int(
@@ -213,6 +215,22 @@ class InternalManagementUseCase:
                 f"El parámetro {field_name} debe ser un número entero",
                 400,
             )
+
+    @staticmethod
+    def _optional_str_list(params, field_name):
+        raw_values = (
+            params.getlist(field_name)
+            if hasattr(params, "getlist")
+            else [params.get(field_name)]
+        )
+        values = [
+            item.strip()
+            for raw in raw_values
+            if raw
+            for item in str(raw).split(",")
+            if item.strip()
+        ]
+        return values or None
 
     @staticmethod
     def _optional_int_list(value, field_name):
@@ -251,6 +269,7 @@ class InternalManagementUseCase:
             "responsible_id": ticket.responsible_id,
             "responsible_name": ticket.responsible_name,
             "sales_user": ticket.sales_user,
+            "approve_support": bool(ticket.approve_support),
             "created_at": ticket.created_at,
             "updated_at": ticket.updated_at,
             "created_by": ticket.created_by,
@@ -262,6 +281,19 @@ class InternalManagementUseCase:
 
     def get_providers(self, internal, external):
         return self.internal_management_repository.get_providers(internal, external)
+
+    PROVIDER_FIELDS = ("ruc", "address", "seller", "number_contact", "email", "status")
+
+    def post_provider(self, body, internal, external):
+        body = body or {}
+        provider = self._optional_text(body.get("provider"))
+        if not provider:
+            raise CustomAPIException("Ingrese el nombre del proveedor", 400)
+
+        data = {field: self._optional_text(body.get(field)) for field in self.PROVIDER_FIELDS}
+        data["provider"] = provider
+        data["created_by"] = self._optional_text(body.get("user"))
+        return self.internal_management_repository.post_provider(data, internal, external)
 
     def get_commercial_ticket_status(self, internal, external):
         return self.internal_management_repository.get_commercial_ticket_status(internal, external)
@@ -431,7 +463,8 @@ class InternalManagementUseCase:
                         for component in components_by_item.get(item.id_item, [])
                     ],
                 }
-                for item in items
+                # Mano de obra al final; sorted es estable y respeta el orden original
+                for item in sorted(items, key=lambda item: bool(item.is_labor))
             ],
             "subtotal": self._amount(quotation.subtotal),
             "iva_rate": self._amount(quotation.iva_rate),
@@ -574,9 +607,31 @@ class InternalManagementUseCase:
             external,
         )
 
+    def approve_support(self, body, internal, external):
+        return self.internal_management_repository.approve_support(
+            body or {},
+            internal,
+            external,
+        )
+
     def approve_ticket_commercial(self, body, internal, external):
         return self.internal_management_repository.approve_ticket_commercial(
             body,
+            internal,
+            external,
+        )
+
+    def return_to_commercial(self, body, internal, external):
+        body = body or {}
+        reason = self._optional_text(body.get("reason"))
+        if not reason:
+            raise CustomAPIException("Ingrese el motivo de la devolución", 400)
+        return self.internal_management_repository.return_to_commercial(
+            {
+                "inspection_id": self._required_int(body.get("inspection_id"), "inspection_id"),
+                "reason": reason,
+                "user": self._optional_text(body.get("user")),
+            },
             internal,
             external,
         )
@@ -1043,14 +1098,27 @@ class InternalManagementUseCase:
 
     def resolve_pending_material(self, id_pending_material, body, internal, external):
         body = body or {}
-        product = self._optional_text(body.get("product"))
-        if not product:
-            raise CustomAPIException("El nombre del producto es obligatorio", 400)
-
         stock = body.get("stock")
         if isinstance(stock, bool) or not isinstance(stock, (int, float)) \
                 or (isinstance(stock, float) and not stock.is_integer()) or stock < 0:
             raise CustomAPIException("El stock debe ser un número entero mayor o igual a cero", 400)
+
+        # Con material_id se usa un producto existente del catálogo: no se crea otro
+        if body.get("material_id") is not None:
+            return self.internal_management_repository.resolve_pending_material(
+                self._required_int(id_pending_material, "id_pending_material"),
+                {
+                    "material_id": self._required_int(body["material_id"], "material_id"),
+                    "stock": int(stock),
+                    "user": body.get("user"),
+                },
+                internal,
+                external,
+            )
+
+        product = self._optional_text(body.get("product"))
+        if not product:
+            raise CustomAPIException("El nombre del producto es obligatorio", 400)
 
         provider_id = body.get("provider_id")
         return self.internal_management_repository.resolve_pending_material(

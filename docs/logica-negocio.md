@@ -13,6 +13,8 @@ cambian). Salvo que se indique otra cosa, están en
 1. [Materiales pendientes de creación](#1-materiales-pendientes-de-creación)
 2. [Documentos de la inspección](#2-documentos-de-la-inspección)
 3. [Tipo de inspección (Soporte)](#3-tipo-de-inspección-soporte)
+4. [Registro de proveedores](#4-registro-de-proveedores)
+5. [Devolver un registro a Comercial](#5-devolver-un-registro-a-comercial)
 
 ---
 
@@ -68,6 +70,7 @@ REGISTRO TÉCNICO* y *PRODUCTOS NUEVOS EN MATERIALES VARIOS*).
 |---|---|---|
 | — | El técnico guarda un producto nuevo, o se aprueba una proforma con un producto nuevo agregado por el comercial | `Pendiente` |
 | `Pendiente` | El comercial guarda la proforma sin ese producto del técnico | `Eliminado de proforma` |
+| `Pendiente` | Al editar una proforma ya aprobada, el comercial quita un producto nuevo que agregó él | `Eliminado de proforma` (y se desvincula de la proforma) |
 | `Eliminado de proforma` | El comercial vuelve a incluirlo en la proforma | `Pendiente` |
 | `Pendiente` | Logística lo crea en el catálogo (desde el modal de entrega o desde la lista de pendientes) | `Creado` |
 
@@ -151,14 +154,29 @@ En `post_material_delivery`, si el ítem o el componente de la proforma no tiene
 Endpoint: `POST /pending-material/{id_pending_material}/resolve`
 Función: `resolve_pending_material`
 
+Hay dos modos:
+- **Crear producto** (sin `material_id`): crea un `TechnicalEquipment` nuevo.
+- **Usar producto existente** (con `material_id`): vincula el pendiente a ese
+  producto del catálogo, sin crear otro. Sirve cuando varios pendientes de
+  distintas inspecciones o proformas son el mismo producto: el primero se crea
+  y los demás se vinculan a él. Los datos del producto (nombre, precio,
+  proveedor) no cambian; `stock` son las unidades recibidas y se suman al
+  stock actual.
+
+No se resuelven otros pendientes automáticamente por nombre: cada uno conserva
+su línea de proforma, su material técnico, su cantidad y sus entregas, y una
+persona elige qué producto le corresponde.
+
 1. Bloquea el pendiente. Debe estar en `Pendiente`: si está en
-   `Eliminado de proforma` o en `Creado`, error 400.
+   `Eliminado de proforma` o en `Creado`, error 400. Con `material_id`, también
+   bloquea el producto; si no existe, error 404.
 2. Valida el stock:
    - Con proforma aprobada (`quote_id` presente): stock ≥ cantidad de la
-     proforma.
+     proforma. Con un producto existente, se compara stock actual + recibido.
    - Sin proforma aprobada: stock ≥ 0.
-3. Crea el `TechnicalEquipment` con `stock = stock ingresado − ya entregado`.
-4. Enlaza las entregas previas al producto creado.
+3. Producto nuevo: `stock = stock ingresado − ya entregado`. Producto
+   existente: `stock = stock actual + recibido − ya entregado`.
+4. Enlaza las entregas previas al producto.
 5. Si el pendiente viene del técnico:
    - Actualiza `material_tech_ticket.material_id`. Así, cuando el comercial arme
      la proforma, lo verá como producto del catálogo, con su precio.
@@ -180,9 +198,17 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 - `register-ticket-commercial`: conserva y envía `material_tech_ticket_id` en
   los ítems nuevos que vienen del técnico. El modal de materiales varios permite
   agregar "Material existente", "Producto nuevo" o uno "Del registro técnico";
-  si este ya estaba como ítem suelto, al aplicar se mueve al grupo.
+  si este ya estaba como ítem suelto, al aplicar se mueve al grupo. Los ítems de
+  la proforma tienen el mismo selector "Del registro técnico", con los productos
+  del técnico que todavía no están en ninguna línea (ni como ítem ni en
+  materiales varios). Así, si se quitó el ítem o se edita una proforma guardada,
+  se puede volver a vincular al pendiente del técnico en lugar de crear un
+  "Producto nuevo" suelto que al aprobar generaría otro pendiente.
 - `components/modals/pending-product-dialog`: diálogo reutilizable para crear el
-  producto. Lo usan el modal de entrega de materiales y la página de pendientes.
+  producto o, con "Usar producto existente", vincularlo a uno del catálogo
+  (`tech-materials` del servicio técnico). Las opciones del catálogo se ordenan
+  poniendo primero las que comparten palabras con el nombre o modelo del
+  pendiente. Lo usan el modal de entrega de materiales y la página de pendientes.
 - `pages/tables/pending-materials`: ruta `/productos-pendientes`, en el menú
   "Productos pendientes" (permiso `LOGISTICA`).
 
@@ -191,8 +217,18 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 - Solo se puede editar una gestión comercial en estado Pendiente
   (`update_ticket_commercial`). Una vez aprobada, la proforma no cambia.
 - `save_sale_quotation` **borra y recrea** los ítems y componentes de la
-  proforma. No es un problema porque los pendientes solo se vinculan a sus
-  líneas al aprobar, y una gestión aprobada ya no se edita.
+  proforma. Desde el commit `71dba1e`, una gestión ya aprobada se puede editar
+  (por ejemplo, cuando se devuelve a Comercial), y sus pendientes ya están
+  vinculados a las líneas. Por eso, antes de borrarlas,
+  `_unlink_quotation_pendings` desvincula los pendientes de la proforma, y
+  después `_relink_quotation_pendings` vuelve a vincular cada uno a la línea
+  recreada con la misma clave (`_pending_line_key`): el material del técnico o,
+  si no tiene, descripción + modelo. No se usa `item_number`, para que reordenar
+  no los cruce. El pendiente toma la cantidad y los precios de la nueva línea.
+  Si no hay coincidencia, queda con `quote_id = NULL` y, si estaba `Pendiente`,
+  pasa a `Eliminado de proforma` (`Creado` no cambia). Si alguna línea ya tiene
+  entregas (`material_delivery_detail`), se responde 400: el detalle de la
+  entrega referencia la línea y no se puede recrear.
 - `checked_item` es opcional en `POST` y `PUT /register-commercial`. Si un ítem
   no lo envía, `save_sale_quotation` conserva el valor anterior buscando la línea
   por `material_id`, luego por `material_tech_ticket_id` y por último por
@@ -200,6 +236,9 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
   coincidencia queda en `false`. Si se reordenan esas últimas líneas, el valor
   puede quedar en otra línea, y dos líneas con el mismo `material_id` comparten
   el mismo valor anterior.
+- Al devolver la proforma (`sale_quotation.items` en `GET /register-commercial`),
+  los ítems con `is_labor = true` van al final; el resto mantiene el orden que
+  trae la consulta. Solo cambia la respuesta: `item_number` y la BD no se tocan.
 - El técnico debe enviar `id_material` al editar. Si no lo envía, sus
   materiales se recrean y los pendientes sin vincular se eliminan y se vuelven
   a generar.
@@ -207,8 +246,8 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
 ### Tests
 
 `swagger_server/test/test_material_delivery.py`, clases
-`TestMaterialDeliveryRepository`, `TestTechnicalPendingMaterials` y
-`TestBundleNewProducts`.
+`TestMaterialDeliveryRepository`, `TestTechnicalPendingMaterials`,
+`TestBundleNewProducts` y `TestEditApprovedQuotation`.
 
 ---
 
@@ -298,3 +337,73 @@ Con Soporte se ocultan "Fecha compromiso" y se muestran "Fecha inicio" y "Fecha 
 ### Tests
 
 `swagger_server/test/test_inspection_type.py`.
+
+---
+
+## 4. Registro de proveedores
+
+### Propósito
+
+Alta de proveedores en `internal_management.providers_products`. El listado
+(`GET /providers`, `get_providers`) se usa como catálogo.
+
+### Reglas
+
+`POST /providers` (`post_provider`). Body: `{"data": {...}, "channel", "externalTransactionId"}`.
+
+- Solo `provider` es obligatorio; vacío o solo espacios responde 400.
+- `ruc`, `address`, `seller`, `number_contact`, `email` y `status` son opcionales.
+  Los textos se recortan y los vacíos se guardan como `NULL`. `status` no tiene
+  valor por defecto.
+- `data.user` se guarda en `created_by`; `created_at` lo pone la BD.
+- No valida duplicados (mismo `ruc` o nombre).
+- Responde `data.id_provider` con el id creado.
+
+### Tests
+
+`swagger_server/test/test_providers.py`.
+
+---
+
+## 5. Devolver un registro a Comercial
+
+### Propósito
+
+Un registro aprobado (gestión comercial con `status_id = 5`) que ya está en
+Proyectos o Financiera vuelve a Comercial para que se edite la proforma. Antes
+se hacía con cambios manuales en la base.
+
+### Disparador
+
+`POST /return-to-commercial` (`return_to_commercial`). Body:
+`{"data": {"inspection_id", "reason", "user"}, "channel", "externalTransactionId"}`.
+
+### Validaciones (en orden)
+
+| Regla | Respuesta |
+|---|---|
+| `inspection_id` entero, `reason` con texto (use case) | 400 |
+| La inspección existe | 404 `Inspección no encontrada` |
+| `management_area` en `Proyectos` o `Financiera` | 400 (`ya está en Comercial` / `Solo se pueden devolver registros de Proyectos o Financiera`) |
+| `status` de la inspección distinto de `Finalizado` | 400 |
+| Última gestión comercial existe y está aprobada (5) | 404 / 400 |
+| Ninguna proforma de la inspección tiene entregas (`material_delivery_history`) | 400: el detalle de la entrega referencia las líneas, que no se podrían recrear al editar |
+| No hay gestiones financieras (`Cobrada` tiene su propio mensaje) | 400: hay que eliminarlas antes |
+
+### Efectos (una transacción)
+
+- Gestión comercial → `status_id = 7` (Pendiente), `updated_by = user`.
+- Inspección → `management_area = 'Comercial'`, `next_area = 'Proyectos'`.
+- `history_area_ticket`: `previous_area` (Proyectos/Financiera) → `Comercial`.
+- `commercial_followup` con `"Devuelto a Comercial desde <área>: <motivo>"`.
+- **No se tocan** la proforma, los pendientes ni el proyecto (`task_technical`).
+  Al editar la proforma, `save_sale_quotation` re-vincula los pendientes (sección 1).
+  Al aprobar otra vez, `update_ticket_commercial` mueve el registro a Proyectos y
+  `_generate_pending_materials` no duplica pendientes. El proyecto se conserva y
+  sigue vinculado, porque no se elimina un registro del dominio técnico.
+
+Responde `data`: `{inspection_id, previous_area, management_area, commercial_status_id}`.
+
+### Tests
+
+`swagger_server/test/test_return_to_commercial.py`.

@@ -1,6 +1,7 @@
 from decimal import Decimal
 from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
@@ -277,6 +278,64 @@ class TestMaterialDeliveryRepository(unittest.TestCase):
             self.repository.resolve_pending_material(
                 pending_id, {"product": "Soporte", "stock": 3}, "internal", "external"
             )
+
+    def test_resolving_with_existing_product_adds_stock_without_creating_another(self):
+        self.repository.post_material_delivery(delivery([
+            {"quotation_item_id": 2, "additional_material_id": None, "quantity": 2},
+        ]), "internal", "external")
+        with self.session() as session:
+            pending_id = session.execute(select(PendingMaterial)).scalar_one().id_pending_material
+
+        # Producto 100 con stock 5: recibe 1, se descuentan las 2 ya entregadas
+        equipment_id = self.repository.resolve_pending_material(
+            pending_id, {"material_id": 100, "stock": 1, "user": "bodega"}, "internal", "external"
+        )
+
+        self.assertEqual(100, equipment_id)
+        with self.session() as session:
+            equipment = session.get(TechnicalEquipment, 100)
+            pending = session.get(PendingMaterial, pending_id)
+            detail = session.execute(select(MaterialDeliveryDetail)).scalar_one()
+            catalog_size = len(session.execute(select(TechnicalEquipment)).scalars().all())
+        self.assertEqual(4, equipment.stock)
+        self.assertEqual("Cámara IP", equipment.product)
+        self.assertEqual(2, catalog_size)
+        self.assertEqual((PendingMaterial.STATUS_CREATED, 100), (pending.status, pending.material_id))
+        self.assertEqual(100, detail.material_id)
+
+    def test_existing_product_stock_plus_received_must_cover_the_proforma(self):
+        with self.session() as session:
+            InternalManagementRepository._generate_pending_materials(session, 10, None)
+            session.get(TechnicalEquipment, 100).stock = 1
+            session.commit()
+            pending_id = session.execute(select(PendingMaterial)).scalar_one().id_pending_material
+
+        with self.assertRaises(CustomAPIException) as error:
+            self.repository.resolve_pending_material(
+                pending_id, {"material_id": 100, "stock": 1}, "internal", "external"
+            )
+        self.assertIn("debe cubrir la cantidad de la proforma (3)", str(error.exception))
+
+        # Stock actual 1 + recibido 2 alcanza
+        self.repository.resolve_pending_material(
+            pending_id, {"material_id": 100, "stock": 2}, "internal", "external"
+        )
+        with self.session() as session:
+            self.assertEqual(3, session.get(TechnicalEquipment, 100).stock)
+
+    def test_resolving_with_unknown_product_is_rejected(self):
+        with self.session() as session:
+            InternalManagementRepository._generate_pending_materials(session, 10, None)
+            session.commit()
+            pending_id = session.execute(select(PendingMaterial)).scalar_one().id_pending_material
+
+        with self.assertRaises(CustomAPIException) as error:
+            self.repository.resolve_pending_material(
+                pending_id, {"material_id": 999, "stock": 5}, "internal", "external"
+            )
+        self.assertEqual(404, error.exception.status_code)
+        with self.session() as session:
+            self.assertEqual(PendingMaterial.STATUS_PENDING, session.get(PendingMaterial, pending_id).status)
 
 
 class TestTechnicalPendingMaterials(unittest.TestCase):
@@ -652,6 +711,136 @@ class TestBundleNewProducts(unittest.TestCase):
         self.assertEqual(equipment_id, detail.material_id)
 
 
+class TestEditApprovedQuotation(unittest.TestCase):
+    """Una proforma aprobada puede volver a Comercial y editarse: sus
+    pendientes se re-vinculan a las líneas recreadas. SQLite no valida FK
+    entre bases adjuntas: se comprueba que ningún pendiente apunte a una
+    línea borrada (en Postgres eso hace fallar el DELETE)."""
+
+    def setUp(self):
+        self.repository = sqlite_repository()
+        seed(self.repository)
+
+    def session(self):
+        return self.repository.db_telearseg.session_factory()
+
+    def save_quotation(self, items):
+        with self.session() as session:
+            quotation = self.repository.save_sale_quotation(
+                session, 50, {"items": items}, "ventas", 1
+            )
+            session.commit()
+            return quotation.id_quote
+
+    def approve(self, quote_id):
+        with self.session() as session:
+            created = InternalManagementRepository._generate_pending_materials(
+                session, quote_id, "ventas"
+            )
+            session.commit()
+            return len(created)
+
+    def pendings(self):
+        with self.session() as session:
+            return session.execute(
+                select(PendingMaterial).order_by(PendingMaterial.id_pending_material)
+            ).scalars().all()
+
+    def line_of(self, pending):
+        with self.session() as session:
+            if pending.quotation_item_id is not None:
+                line = session.get(SaleQuotationItem, pending.quotation_item_id)
+            else:
+                line = session.get(SaleAdditionalMaterials, pending.additional_material_id)
+        self.assertIsNotNone(line, "el pendiente apunta a una línea borrada")
+        return line
+
+    @staticmethod
+    def new_item(number, description, quantity=1, model=None):
+        return {"item": number, "material_id": None, "is_new": True, "is_labor": False,
+                "is_bundle": False, "quantity": quantity, "base_price": 2,
+                "model": model, "description": description, "components": []}
+
+    @staticmethod
+    def labor(number):
+        return {"item": number, "material_id": None, "is_new": False, "is_labor": True,
+                "is_bundle": False, "quantity": 1, "model": "M/V",
+                "description": "Instalación", "components": []}
+
+    def approved_quotation(self):
+        items = [
+            self.new_item(1, "CAMARA ANALOGA", model="DS-2CE"),
+            self.new_item(2, "FUENTE 12VDC", quantity=2),
+            {"item": 3, "is_bundle": True, "quantity": 1, "components": [
+                {"material_id": None, "is_new": True, "model": "CE-1",
+                 "description": "Caja estanca", "quantity": 4},
+            ]},
+            self.labor(4),
+        ]
+        quote_id = self.save_quotation(items)
+        self.assertEqual(3, self.approve(quote_id))
+        return quote_id, items
+
+    def test_editing_an_approved_quotation_relinks_its_pendings(self):
+        quote_id, items = self.approved_quotation()
+        before = {p.id_pending_material: p.name_material for p in self.pendings()}
+
+        items[1] = self.new_item(2, "FUENTE 12VDC", quantity=5)
+        self.save_quotation(items)
+
+        pendings = self.pendings()
+        self.assertEqual(before, {p.id_pending_material: p.name_material for p in pendings})
+        for pending in pendings:
+            self.assertEqual(quote_id, pending.quote_id)
+            self.assertEqual(PendingMaterial.STATUS_PENDING, pending.status)
+            self.assertEqual(pending.name_material, self.line_of(pending).description)
+        self.assertEqual(5, pendings[1].quantity)
+        # Volver a aprobar no duplica
+        self.assertEqual(0, self.approve(quote_id))
+
+    def test_reordering_lines_keeps_each_pending_on_its_product(self):
+        quote_id, items = self.approved_quotation()
+        camera, power = items[0], items[1]
+        self.save_quotation([{**power, "item": 1}, {**camera, "item": 2}, *items[2:]])
+
+        for pending in self.pendings():
+            self.assertEqual(pending.name_material, self.line_of(pending).description)
+
+    def test_removed_product_marks_its_pending_removed(self):
+        quote_id, items = self.approved_quotation()
+        self.save_quotation([items[0], items[2], items[3]])
+
+        removed = [p for p in self.pendings() if p.name_material == "FUENTE 12VDC"]
+        [pending] = removed
+        self.assertEqual(PendingMaterial.STATUS_REMOVED, pending.status)
+        self.assertIsNone(pending.quote_id)
+        self.assertIsNone(pending.quotation_item_id)
+
+    def test_edit_is_rejected_when_lines_were_delivered(self):
+        quote_id, items = self.approved_quotation()
+        with self.session() as session:
+            line = session.execute(
+                select(SaleQuotationItem).where(SaleQuotationItem.sale_quote_id == quote_id,
+                                                SaleQuotationItem.item_number == 1)
+            ).scalar_one()
+            pending = session.execute(
+                select(PendingMaterial).where(PendingMaterial.quotation_item_id == line.id_item)
+            ).scalar_one()
+            history = MaterialDeliveryHistory(task_id=1, quote_id=quote_id, delivered_to="jperez",
+                                              status=MaterialDeliveryHistory.STATUS_REGISTERED)
+            session.add(history)
+            session.flush()
+            session.add(MaterialDeliveryDetail(history_id=history.id_history,
+                                               quotation_item_id=line.id_item,
+                                               pending_material_id=pending.id_pending_material,
+                                               quantity_delivered=1))
+            session.commit()
+
+        with self.assertRaises(CustomAPIException) as error:
+            self.save_quotation(items)
+        self.assertEqual(400, error.exception.status_code)
+
+
 class FakeDeliveryRepository:
     def __init__(self):
         self.delivery = None
@@ -778,6 +967,21 @@ class TestMaterialDeliveryUseCase(unittest.TestCase):
             self.use_case.resolve_pending_material(
                 9, {"product": "Soporte", "stock": 2.5}, "internal", "external"
             )
+
+    def test_resolve_with_existing_product_does_not_require_product_data(self):
+        repository = MagicMock()
+        use_case = InternalManagementUseCase(repository)
+
+        use_case.resolve_pending_material(
+            "9", {"material_id": "100", "stock": 0, "product": "ignorado", "user": "bodega"},
+            "internal", "external",
+        )
+
+        repository.resolve_pending_material.assert_called_once_with(
+            9, {"material_id": 100, "stock": 0, "user": "bodega"}, "internal", "external"
+        )
+        with self.assertRaises(CustomAPIException):
+            use_case.resolve_pending_material(9, {"material_id": "x", "stock": 0}, "i", "e")
 
 
 if __name__ == "__main__":

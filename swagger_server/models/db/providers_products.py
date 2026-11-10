@@ -30,7 +30,7 @@ class ProvidersProducts(Base):
     address = Column(Text)
     seller = Column(Text)
     number_contact = Column(Text)
-    email = Column(DateTime)
+    email = Column(Text)
     status = Column(Text)
     
     created_by = Column(Text)    

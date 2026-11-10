@@ -528,6 +528,71 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+    post:
+      tags:
+      - Catalogs
+      summary: Registra un proveedor
+      description: Guarda un proveedor. Solo provider es obligatorio; user se guarda en created_by.
+      operationId: post_provider
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  required:
+                  - provider
+                  properties:
+                    provider:
+                      type: string
+                      example: Distribuidora ABC
+                    ruc:
+                      nullable: true
+                      type: string
+                      example: "0991234567001"
+                    address:
+                      nullable: true
+                      type: string
+                      example: Av. 9 de Octubre 123
+                    seller:
+                      nullable: true
+                      type: string
+                      example: Juan Pérez
+                    number_contact:
+                      nullable: true
+                      type: string
+                      example: "0991234567"
+                    email:
+                      nullable: true
+                      type: string
+                      example: ventas@abc.com
+                    status:
+                      nullable: true
+                      type: string
+                      example: Activo
+                    user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /inspection:
     get:
       tags:
@@ -560,10 +625,15 @@ paths:
           in: query
           required: false
           description: >-
-            Filtra por tipo. Inspección incluye las antiguas sin tipo.
+            Filtra por uno o varios tipos (type=Soporte&type=Asistencia).
+            Inspección incluye las antiguas sin tipo.
+          style: form
+          explode: true
           schema:
-            type: string
-            enum: [Inspección, Soporte]
+            type: array
+            items:
+              type: string
+              enum: [Inspección, Soporte, Asistencia]
         - name: start_date
           in: query
           required: false
@@ -581,6 +651,13 @@ paths:
         - name: pending_commercial
           in: query
           required: false
+          schema:
+            type: boolean
+            example: true
+        - name: pending_approve_support
+          in: query
+          required: false
+          description: Registros con approve_support en false o null (sin aprobar).
           schema:
             type: boolean
             example: true
@@ -703,9 +780,9 @@ paths:
                     JSON en texto con los campos de la inspección: client_id, ubication_id,
                     client_name, ubication_name, contact, case_type, priority, responsible_id,
                     responsible_name, management_status, title_ticket, commitment_date,
-                    status, user, type ("Inspección" por defecto o "Soporte"; Soporte
-                    se queda en Técnica y no continúa a las siguientes áreas),
-                    start_date y end_date (obligatorias para Soporte, en lugar de
+                    status, user, type ("Inspección" por defecto, "Soporte" o "Asistencia";
+                    Soporte y Asistencia se quedan en Técnica y no continúan a las siguientes áreas),
+                    start_date y end_date (obligatorias para Soporte y Asistencia, en lugar de
                     commitment_date; end_date no puede ser anterior a start_date).
                   example: '{"client_id": 1, "ubication_id": 1, "client_name": "TELEARGEG", "ubication_name": "GUAYAS", "contact": "Daniel", "case_type": "Cotización", "priority": "Alta", "responsible_id": "fcea920f-7412-b5da-7be0-cf42b8c93759", "responsible_name": "Daniel", "management_status": "En proceso", "title_ticket": "Propuesta zentinel", "commitment_date": "2024-06-01T12:00:00Z", "status": "En proceso", "user": "dmales", "type": "Inspección"}'
                 files:
@@ -807,9 +884,9 @@ paths:
                       example: Listo para cotizar
                     type:
                       type: string
-                      enum: [Inspección, Soporte]
+                      enum: [Inspección, Soporte, Asistencia]
                       description: >-
-                        Solo puede pasar a Soporte si la inspección no avanzó en el
+                        Solo puede pasar a Soporte o Asistencia si la inspección no avanzó en el
                         flujo (sin registro técnico ni comercial).
                     commitment_date:
                       type: string
@@ -1565,6 +1642,58 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResponseError"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /return-to-commercial:
+    post:
+      tags:
+      - Tickets Management
+      summary: Devuelve a Comercial un registro que está en Proyectos o Financiera
+      description: >-
+        La gestión comercial aprobada vuelve a Pendiente para que Comercial la
+        edite. Se rechaza si la proforma tiene materiales entregados, si hay
+        gestiones financieras o si el registro está finalizado. El proyecto, la
+        proforma y sus pendientes se conservan.
+      operationId: return_to_commercial
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  required:
+                  - inspection_id
+                  - reason
+                  properties:
+                    inspection_id:
+                      type: integer
+                      example: 45
+                    reason:
+                      type: string
+                      example: Cliente pidió cambios en la proforma
+                    user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /approve-commercial-ticket:
     post:
       tags:
@@ -1689,6 +1818,54 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResponseError"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /approve-support:
+    post:
+      tags:
+      - Inspection
+      summary: Aprueba un Soporte / Asistencia.
+      description: Actualiza approve_support a true. Solo aplica a registros de tipo Soporte o Asistencia.
+      operationId: approve_support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - data
+              properties:
+                data:
+                  type: object
+                  required:
+                  - id_inspection
+                  - user
+                  properties:
+                    id_inspection:
+                      type: integer
+                      example: 1
+                    user:
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /approve-technical-inspection:
     post:
@@ -2391,11 +2568,14 @@ paths:
     post:
       tags:
       - Material Delivery
-      summary: Crea en el catálogo el producto de un material pendiente
+      summary: Crea en el catálogo el producto de un material pendiente o lo vincula a uno existente
       description: >-
-        Si el pendiente ya está en una proforma aprobada, el stock debe ser al menos la
-        cantidad de la proforma y se guarda descontando lo ya entregado con el pendiente;
-        si aún no, basta con stock mayor o igual a cero.
+        Sin material_id crea el producto: si el pendiente ya está en una proforma aprobada,
+        el stock debe ser al menos la cantidad de la proforma y se guarda descontando lo ya
+        entregado con el pendiente; si aún no, basta con stock mayor o igual a cero.
+        Con material_id usa ese producto del catálogo (se ignoran los demás datos del
+        producto): stock es lo recibido y se suma al stock actual; con proforma aprobada,
+        stock actual + recibido debe cubrir la cantidad de la proforma.
       operationId: resolve_pending_material
       parameters:
         - name: id_pending_material
@@ -2412,8 +2592,14 @@ paths:
                 data:
                   type: object
                   properties:
+                    material_id:
+                      nullable: true
+                      type: integer
+                      description: Producto existente del catálogo; si viene, no se crea uno nuevo.
+                      example: null
                     product:
                       type: string
+                      description: Obligatorio si no viene material_id.
                       example: Soporte de pared personalizado
                     code:
                       nullable: true

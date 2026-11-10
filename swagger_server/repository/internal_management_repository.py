@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from loguru import logger
-from sqlalchemy import and_, delete, exists, func, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.client_companies import ClientCompany
@@ -49,6 +49,10 @@ class InternalManagementRepository:
     FOLLOWUP_TYPE_REGISTERED = "Registrado"
     INSPECTION_TYPE = "Inspección"
     SUPPORT_TYPE = "Soporte"
+    ASSISTANCE_TYPE = "Asistencia"
+    # Tipos que no continúan el flujo (se quedan en Técnica, usan fecha inicio/fin)
+    SUPPORT_TYPES = (SUPPORT_TYPE, ASSISTANCE_TYPE)
+    VALID_TYPES = (INSPECTION_TYPE, SUPPORT_TYPE, ASSISTANCE_TYPE)
 
     def __init__(self):
         self.db_telearseg = PostgreSQLClient("TELEARSEG")
@@ -98,6 +102,7 @@ class InternalManagementRepository:
         ).scalars().first()
 
         previous_checks = {}
+        linked_pendings = []
         if sale_quotation is None:
             sale_quotation = SaleQuotation(
                 inspection_id=inspection_id,
@@ -119,6 +124,12 @@ class InternalManagementRepository:
                 ): previous.checked_item
                 for previous in previous_items
             }
+
+            # Una proforma aprobada puede volver a Comercial: sus pendientes se
+            # desvinculan aquí y se re-vinculan a las líneas recreadas
+            linked_pendings = self._unlink_quotation_pendings(
+                session, sale_quotation.id_quote, previous_items
+            )
 
             # Los componentes referencian a los items: se eliminan primero
             session.execute(
@@ -208,8 +219,142 @@ class InternalManagementRepository:
                     updated_by=user,
                 ))
 
+        if linked_pendings:
+            self._relink_quotation_pendings(
+                session, sale_quotation.id_quote, linked_pendings
+            )
         self._sync_quotation_pendings(session, inspection_id, technical_ids)
         return sale_quotation
+
+    @staticmethod
+    def _pending_line_key(material_tech_ticket_id, model, description):
+        """Identifica la línea de un pendiente entre ediciones de la proforma
+        (id_item cambia al recrearla). No usa item_number: al reordenar las
+        líneas, un pendiente podría quedar en otro producto."""
+        if material_tech_ticket_id is not None:
+            return "technical", material_tech_ticket_id
+
+        def normalize(value):
+            return (str(value).strip() or None) if value is not None else None
+
+        return "new", normalize(description), normalize(model)
+
+    @classmethod
+    def _unlink_quotation_pendings(cls, session, quote_id, previous_items):
+        """Antes de recrear las líneas de la proforma: rechaza la edición si ya
+        hay entregas y desvincula los pendientes de sus líneas. Devuelve
+        (pendiente, clave de su línea) para re-vincularlos después."""
+        item_ids = [item.id_item for item in previous_items]
+        previous_components = session.execute(
+            select(SaleAdditionalMaterials).where(
+                SaleAdditionalMaterials.sale_quote_id == quote_id
+            )
+        ).scalars().all()
+        component_ids = [component.id_extra for component in previous_components]
+
+        line_filters = []
+        if item_ids:
+            line_filters.append(MaterialDeliveryDetail.quotation_item_id.in_(item_ids))
+        if component_ids:
+            line_filters.append(
+                MaterialDeliveryDetail.additional_material_id.in_(component_ids)
+            )
+        if line_filters and session.execute(
+            select(exists().where(or_(*line_filters)))
+        ).scalar():
+            # El detalle de la entrega referencia las líneas: no se pueden recrear
+            raise CustomAPIException(
+                "La proforma ya tiene materiales entregados; no se puede editar",
+                400,
+            )
+
+        pendings = session.execute(
+            select(PendingMaterial)
+            .where(PendingMaterial.quote_id == quote_id)
+            .order_by(PendingMaterial.id_pending_material)
+        ).scalars().all()
+        if not pendings:
+            return []
+
+        lines = {("item", item.id_item): item for item in previous_items}
+        lines.update(
+            {("component", component.id_extra): component for component in previous_components}
+        )
+        linked = []
+        for pending in pendings:
+            line = (
+                lines.get(("item", pending.quotation_item_id))
+                if pending.quotation_item_id is not None
+                else lines.get(("component", pending.additional_material_id))
+            )
+            source = line or pending
+            key = cls._pending_line_key(
+                source.material_tech_ticket_id,
+                source.model,
+                line.description if line is not None else pending.name_material,
+            )
+            linked.append((pending, key))
+            pending.quotation_item_id = None
+            pending.additional_material_id = None
+        session.flush()
+        return linked
+
+    @classmethod
+    def _relink_quotation_pendings(cls, session, quote_id, linked_pendings):
+        """Vincula cada pendiente a la línea recreada con la misma clave. Los
+        que ya no están en la proforma quedan fuera de ella."""
+        session.flush()
+        new_items = session.execute(
+            select(SaleQuotationItem)
+            .where(
+                SaleQuotationItem.sale_quote_id == quote_id,
+                SaleQuotationItem.is_new.is_(True),
+                SaleQuotationItem.is_labor.isnot(True),
+                SaleQuotationItem.material_id.is_(None),
+            )
+            .order_by(SaleQuotationItem.id_item)
+        ).scalars().all()
+        new_components = session.execute(
+            select(SaleAdditionalMaterials)
+            .where(
+                SaleAdditionalMaterials.sale_quote_id == quote_id,
+                SaleAdditionalMaterials.is_new.is_(True),
+                SaleAdditionalMaterials.material_id.is_(None),
+            )
+            .order_by(SaleAdditionalMaterials.id_extra)
+        ).scalars().all()
+
+        candidates = {}
+        for line, item_id, additional_id in (
+            [(item, item.id_item, None) for item in new_items]
+            + [(component, None, component.id_extra) for component in new_components]
+        ):
+            key = cls._pending_line_key(
+                line.material_tech_ticket_id, line.model, line.description
+            )
+            candidates.setdefault(key, []).append((line, item_id, additional_id))
+
+        for pending, key in linked_pendings:
+            matches = candidates.get(key)
+            if not matches:
+                # Ya no está en la proforma; el del técnico vuelve a quedar
+                # disponible para _sync_quotation_pendings
+                pending.quote_id = None
+                if pending.status == PendingMaterial.STATUS_PENDING:
+                    pending.status = PendingMaterial.STATUS_REMOVED
+                continue
+
+            line, item_id, additional_id = matches.pop(0)
+            pending.quotation_item_id = item_id
+            pending.additional_material_id = additional_id
+            pending.model = line.model or pending.model
+            pending.quantity = line.quantity
+            pending.base_price = line.base_price
+            pending.profit_margin = line.profit_margin
+            pending.profit_margin_dollar = line.profit_margin_dollar
+            if pending.status == PendingMaterial.STATUS_REMOVED:
+                pending.status = PendingMaterial.STATUS_PENDING
+        session.flush()
 
     @staticmethod
     def _validate_quotation_technical_materials(session, inspection_id, quotation):
@@ -367,8 +512,8 @@ class InternalManagementRepository:
             try:
                 validate_documents(files)
                 inspection_type = self._inspection_type(body.get("type"))
-                if inspection_type == self.SUPPORT_TYPE:
-                    # Soporte no continúa el flujo: se queda en Técnica
+                if inspection_type in self.SUPPORT_TYPES:
+                    # Soporte / Asistencia no continúan el flujo: se quedan en Técnica
                     current_area, next_area = "Técnica", None
                 else:
                     current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
@@ -441,19 +586,23 @@ class InternalManagementRepository:
 
                 inspection = self._get_inspection(session, id_inspection)
 
-                if "type" in body:
+                # El formulario siempre envía type: solo se procesa si cambia,
+                # para no sacar del flujo a una Asistencia ya aprobada
+                if "type" in body and self._inspection_type(body["type"]) != inspection.type:
                     inspection_type = self._inspection_type(body["type"])
                     if (
-                        inspection_type == self.SUPPORT_TYPE
-                        and not self._is_support(inspection)
+                        inspection_type in self.SUPPORT_TYPES
+                        and self._follows_flow(inspection)
                         and self._inspection_started_flow(session, inspection)
                     ):
                         raise CustomAPIException(
-                            "La inspección ya avanzó en el flujo; no puede cambiarse a Soporte",
+                            f"La inspección ya avanzó en el flujo; no puede cambiarse a {inspection_type}",
                             400,
                         )
                     inspection.type = inspection_type
-                    if inspection_type == self.SUPPORT_TYPE:
+                    if inspection_type in self.SUPPORT_TYPES:
+                        # Un nuevo tipo de soporte requiere una nueva aprobación
+                        inspection.approve_support = False
                         inspection.next_area = None
                     elif inspection.next_area is None and inspection.management_area == "Técnica":
                         inspection.next_area = "Comercial"
@@ -483,7 +632,7 @@ class InternalManagementRepository:
                 if (
                     body.get("status") == "Listo para cotizar"
                     and inspection.management_area == "Técnica"
-                    and not self._is_support(inspection)
+                    and self._follows_flow(inspection)
                 ):
                     inspection.management_area = "Comercial"
                     inspection.next_area = "Proyectos"
@@ -679,7 +828,8 @@ class InternalManagementRepository:
 
                 if ticket is None:
                     raise CustomAPIException("Inspección no encontrada", 404)
-                self._ensure_not_support(ticket)
+                # Las Asistencias aprobadas sí pasan por Comercial
+                self._ensure_follows_flow(ticket)
 
                 if body.get('status_id') == 5: 
                     ticket.management_area = 'Proyectos'
@@ -1030,6 +1180,21 @@ class InternalManagementRepository:
                     raise exception
 
                 raise CustomAPIException("Error al obtener en la base de datos", 500)
+
+    def post_provider(self, data, internal, external):
+        with self.db_telearseg.session_factory() as session:
+            try:
+                provider = ProvidersProducts(**data)
+                session.add(provider)
+                session.commit()
+                return provider.id_provider
+            except Exception as exception:
+                session.rollback()
+                logger.error('Error: {}', str(exception), internal=internal, external=external)
+                if isinstance(exception, CustomAPIException):
+                    raise exception
+
+                raise CustomAPIException("Error al guardar en la base de datos", 500)
 
     def get_providers(self, internal, external):
         with self.db_telearseg.session_factory() as session:
@@ -1524,6 +1689,53 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
+    def approve_support(self, body, internal, external):
+        """Marca un Soporte / Asistencia como aprobado (approve_support = true)."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                self._validate_update_body(body, "id_inspection")
+                self._validate_update_body(body, "user")
+                inspection = self._get_inspection(session, body.get("id_inspection"))
+
+                if not self._is_support(inspection):
+                    raise CustomAPIException(
+                        "Solo se pueden aprobar registros de tipo Soporte o Asistencia", 400
+                    )
+                if inspection.approve_support:
+                    raise CustomAPIException(
+                        f"El {inspection.type.lower()} ya se encuentra aprobado", 400
+                    )
+
+                inspection.approve_support = True
+                # inspection.status = "Listo para cotizar"
+                inspection.updated_by = body.get("user")
+
+                # La Asistencia aprobada pasa a Comercial y sigue el flujo normal;
+                # el Soporte se queda en Técnica
+                if inspection.type == self.ASSISTANCE_TYPE:
+                    previous_area = inspection.management_area or "Técnica"
+                    inspection.status = "Listo para cotizar"
+                    inspection.management_area = "Comercial"
+                    inspection.next_area = "Proyectos"
+                    session.add(HistoryAreaTicket(
+                        ticket_id=inspection.id_inspection,
+                        previous_area=previous_area,
+                        current_area="Comercial",
+                        created_by=body.get("user"),
+                    ))
+
+                session.commit()
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al aprobar el soporte",
+                    internal,
+                    external,
+                )
+            finally:
+                session.close()
+
     def approve_ticket_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
@@ -1692,6 +1904,103 @@ class InternalManagementRepository:
                 session.close()
 
 
+    RETURNABLE_AREAS = ("Proyectos", "Financiera")
+
+    def return_to_commercial(self, data, internal, external):
+        """Devuelve a Comercial un registro aprobado que está en Proyectos o
+        Financiera: la gestión comercial vuelve a Pendiente para editarla. La
+        proforma, sus pendientes y el proyecto se conservan; al editar la
+        proforma los pendientes se re-vinculan (save_sale_quotation)."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                inspection = self._get_inspection(session, data["inspection_id"])
+                previous_area = inspection.management_area
+                if previous_area == "Comercial":
+                    raise CustomAPIException("El registro ya está en Comercial", 400)
+                if previous_area not in self.RETURNABLE_AREAS:
+                    raise CustomAPIException(
+                        "Solo se pueden devolver registros de Proyectos o Financiera", 400
+                    )
+                if inspection.status == "Finalizado":
+                    raise CustomAPIException(
+                        "El registro está finalizado; no se puede devolver", 400
+                    )
+
+                management = self._get_latest_management(
+                    session,
+                    CommercialTicketManagement,
+                    inspection.id_inspection,
+                    CommercialTicketManagement.id_management_commercial,
+                )
+                if management is None:
+                    raise CustomAPIException("Gestión comercial no encontrada", 404)
+                if management.status_id != self.COMMERCIAL_STATUS_APPROVED:
+                    raise CustomAPIException("La gestión comercial no está aprobada", 400)
+
+                # Las entregas referencian las líneas de la proforma: no se podría editar
+                delivered = session.execute(
+                    select(exists().where(
+                        MaterialDeliveryHistory.quote_id == SaleQuotation.id_quote,
+                        SaleQuotation.inspection_id == inspection.id_inspection,
+                    ))
+                ).scalar()
+                if delivered:
+                    raise CustomAPIException(
+                        "La proforma ya tiene materiales entregados; "
+                        "no se puede devolver a Comercial",
+                        400,
+                    )
+
+                financial_statuses = session.execute(
+                    select(FinancialTicketManagement.status).where(
+                        FinancialTicketManagement.ticket_id == inspection.id_inspection
+                    )
+                ).scalars().all()
+                if "Cobrada" in financial_statuses:
+                    raise CustomAPIException(
+                        "El registro tiene facturas cobradas; no se puede devolver", 400
+                    )
+                if financial_statuses:
+                    raise CustomAPIException(
+                        "El registro tiene gestiones financieras registradas; "
+                        "elimínelas antes de devolverlo a Comercial",
+                        400,
+                    )
+
+                user = data.get("user")
+                management.status_id = self.COMMERCIAL_STATUS_PENDING
+                management.updated_by = user
+                inspection.management_area = "Comercial"
+                inspection.next_area = "Proyectos"
+                inspection.updated_by = user
+                inspection.updated_at = datetime.now()
+                session.add(HistoryAreaTicket(
+                    ticket_id=inspection.id_inspection,
+                    previous_area=previous_area,
+                    current_area="Comercial",
+                    created_by=user,
+                ))
+                session.add(CommercialFollowup(
+                    management_commercial_id=management.id_management_commercial,
+                    observations=f"Devuelto a Comercial desde {previous_area}: {data['reason']}",
+                    created_by=user,
+                ))
+                session.commit()
+                return {
+                    "inspection_id": inspection.id_inspection,
+                    "previous_area": previous_area,
+                    "management_area": inspection.management_area,
+                    "commercial_status_id": management.status_id,
+                }
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al devolver el registro a Comercial",
+                    internal,
+                    external,
+                )
+
     def new_followup_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
             try:
@@ -1823,10 +2132,8 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
-                if filters.get("type") == self.SUPPORT_TYPE:
-                    conditions.append(InspectionTechnical.type == self.SUPPORT_TYPE)
-                elif filters.get("type") == self.INSPECTION_TYPE:
-                    conditions.append(self._not_support())
+                if filters.get("type"):
+                    conditions.append(self._type_condition(filters["type"]))
                 if filters.get("pending_technical") == 'true':
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia);
                     # las de Soporte no continúan el flujo
@@ -1839,13 +2146,20 @@ class InternalManagementRepository:
                     conditions.append(
                         InspectionTechnical.status == "Listo para cotizar"
                     )
-                    conditions.append(self._not_support())
+                    # Incluye las Asistencias aprobadas
+                    conditions.append(self._in_flow())
 
                     conditions.append(
                         ~exists().where(
                             CommercialTicketManagement.ticket_id
                             == InspectionTechnical.id_inspection
                         )
+                    )
+
+                if filters.get("pending_approve_support") == 'true':
+                    # Soportes / Asistencias sin aprobar (approve_support false o NULL)
+                    conditions.append(
+                        InspectionTechnical.approve_support.is_not(True)
                     )
 
                 if filters.get("ready_for_project") == 'true':
@@ -1928,6 +2242,8 @@ class InternalManagementRepository:
                 # /inspection?pending_commercial=true,
                 # /register-commercial?is_registred=true y ?pending_financial=true
                 pending_technical = count_inspections(
+                    # Las Asistencias aprobadas pasan directo a Comercial
+                    self._not_support(),
                     ~exists().where(
                         TechnicalTicketManagement.inspection_id
                         == InspectionTechnical.id_inspection
@@ -2126,8 +2442,9 @@ class InternalManagementRepository:
 
     @classmethod
     def _dashboard_inspection_conditions(cls, filters):
-        """Rango de fechas del dashboard; las inspecciones de Soporte no cuentan."""
-        conditions = [cls._not_support()]
+        """Rango de fechas del dashboard; solo cuentan los registros del flujo
+        (no Soporte ni Asistencias sin aprobar)."""
+        conditions = [cls._in_flow()]
         if filters.get("start_date"):
             conditions.append(InspectionTechnical.created_at >= filters["start_date"])
         if filters.get("end_date"):
@@ -2256,9 +2573,9 @@ class InternalManagementRepository:
         """Valida el tipo de inspección; sin valor se asume Inspección."""
         if value in (None, ""):
             return cls.INSPECTION_TYPE
-        if value not in (cls.INSPECTION_TYPE, cls.SUPPORT_TYPE):
+        if value not in cls.VALID_TYPES:
             raise CustomAPIException(
-                f"El campo type debe ser {cls.INSPECTION_TYPE} o {cls.SUPPORT_TYPE}", 400
+                f"El campo type debe ser {', '.join(cls.VALID_TYPES)}", 400
             )
         return value
 
@@ -2299,20 +2616,64 @@ class InternalManagementRepository:
             )
 
     @classmethod
+    def _type_condition(cls, types):
+        """Filtra por uno o varios tipos (ej: ["Soporte", "Asistencia"]).
+        Inspección incluye también las antiguas con type NULL."""
+        if isinstance(types, str):
+            types = [types]
+        conditions = [InspectionTechnical.type.in_(types)]
+        if cls.INSPECTION_TYPE in types:
+            conditions.append(InspectionTechnical.type.is_(None))
+        return or_(*conditions)
+
+    @classmethod
     def _not_support(cls):
+        """Excluye Soporte y Asistencia (ej: pendientes de Técnica)."""
         # IS DISTINCT FROM para no descartar las inspecciones antiguas con type NULL
-        return InspectionTechnical.type.is_distinct_from(cls.SUPPORT_TYPE)
+        return and_(
+            *(InspectionTechnical.type.is_distinct_from(t) for t in cls.SUPPORT_TYPES)
+        )
+
+    @classmethod
+    def _in_flow(cls):
+        """Registros que siguen el flujo Comercial -> Proyectos -> Financiera:
+        los que no son Soporte / Asistencia y las Asistencias aprobadas."""
+        return or_(
+            cls._not_support(),
+            and_(
+                InspectionTechnical.type == cls.ASSISTANCE_TYPE,
+                InspectionTechnical.approve_support.is_(True),
+            ),
+        )
 
     @classmethod
     def _is_support(cls, inspection):
-        return inspection.type == cls.SUPPORT_TYPE
+        return inspection.type in cls.SUPPORT_TYPES
+
+    @classmethod
+    def _follows_flow(cls, inspection):
+        """Versión en Python de _in_flow para una inspección ya cargada."""
+        if not cls._is_support(inspection):
+            return True
+        return inspection.type == cls.ASSISTANCE_TYPE and bool(inspection.approve_support)
 
     @classmethod
     def _ensure_not_support(cls, inspection):
+        """Soporte y Asistencia no tienen registro técnico."""
         if cls._is_support(inspection):
             raise CustomAPIException(
                 "Las inspecciones de soporte no continúan el flujo", 400
             )
+
+    @classmethod
+    def _ensure_follows_flow(cls, inspection):
+        if not cls._follows_flow(inspection):
+            message = (
+                "La asistencia debe estar aprobada para continuar el flujo"
+                if inspection.type == cls.ASSISTANCE_TYPE
+                else "Las inspecciones de soporte no continúan el flujo"
+            )
+            raise CustomAPIException(message, 400)
 
     @staticmethod
     def _inspection_started_flow(session, inspection):
@@ -3001,10 +3362,12 @@ class InternalManagementRepository:
                 )
 
     def resolve_pending_material(self, id_pending_material, data, internal, external):
-        """Crea en el catálogo el producto de un pendiente. El stock guardado es
-        el ingresado menos lo que ya se entregó con el pendiente, y esas entregas
-        quedan enlazadas al producto creado. Si viene del técnico, su material y
-        los ítems de la proforma aún sin aprobar pasan a usar el producto creado."""
+        """Resuelve un pendiente con un producto del catálogo: lo crea o, con
+        data["material_id"], usa uno existente y le suma el stock recibido (así
+        varios pendientes del mismo producto no lo duplican). Al stock se le
+        descuenta lo ya entregado con el pendiente, y esas entregas quedan
+        enlazadas al producto. Si viene del técnico, su material y los ítems de
+        la proforma aún sin aprobar pasan a usar el producto."""
         with self.db_telearseg.session_factory() as session:
             try:
                 user = data.get("user")
@@ -3025,11 +3388,26 @@ class InternalManagementRepository:
                     )
 
                 stock = data["stock"]
-                # Sin proforma aprobada no hay cantidad comprometida que cubrir
+                existing = None
+                if data.get("material_id") is not None:
+                    existing = session.execute(
+                        select(TechnicalEquipment)
+                        .where(TechnicalEquipment.id_equipment == data["material_id"])
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        raise CustomAPIException("Producto del catálogo no encontrado", 404)
+
+                # Sin proforma aprobada no hay cantidad comprometida que cubrir.
+                # Con un producto existente también cuenta su stock actual
+                available = stock + (int(existing.stock or 0) if existing is not None else 0)
                 if pending.quote_id is not None \
-                        and stock < Decimal(str(pending.quantity or 0)):
+                        and available < Decimal(str(pending.quantity or 0)):
+                    quantity = self._format_quantity(pending.quantity)
                     raise CustomAPIException(
-                        f"El stock debe ser al menos la cantidad de la proforma ({self._format_quantity(pending.quantity)})",
+                        f"El stock actual más lo recibido debe cubrir la cantidad de la proforma ({quantity})"
+                        if existing is not None
+                        else f"El stock debe ser al menos la cantidad de la proforma ({quantity})",
                         400,
                     )
 
@@ -3045,22 +3423,28 @@ class InternalManagementRepository:
                     )
                 ).scalar_one()
 
-                equipment = TechnicalEquipment(
-                    code=data.get("code"),
-                    product=data["product"],
-                    unit=data.get("unit"),
-                    model=data.get("model"),
-                    provider_id=data.get("provider_id"),
-                    base_price=data.get("base_price"),
-                    profit_margin=data.get("profit_margin"),
-                    profit_margin_dollar=data.get("profit_margin_dollar"),
-                    price=data.get("price"),
-                    description=data.get("description"),
-                    stock=stock - int(delivered or 0),
-                    created_by=user,
-                    updated_by=user,
-                )
-                session.add(equipment)
+                if existing is not None:
+                    # Solo cambia el stock; los datos del producto no se tocan
+                    equipment = existing
+                    equipment.stock = available - int(delivered or 0)
+                    equipment.updated_by = user
+                else:
+                    equipment = TechnicalEquipment(
+                        code=data.get("code"),
+                        product=data["product"],
+                        unit=data.get("unit"),
+                        model=data.get("model"),
+                        provider_id=data.get("provider_id"),
+                        base_price=data.get("base_price"),
+                        profit_margin=data.get("profit_margin"),
+                        profit_margin_dollar=data.get("profit_margin_dollar"),
+                        price=data.get("price"),
+                        description=data.get("description"),
+                        stock=stock - int(delivered or 0),
+                        created_by=user,
+                        updated_by=user,
+                    )
+                    session.add(equipment)
                 session.flush()
 
                 session.execute(

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS internal_management.inspection_technical
     priority text COLLATE pg_catalog."default",
     client_id integer,
     ubication_id integer,
+    approve_support boolean,
     contact text COLLATE pg_catalog."default",
     sales_user text COLLATE pg_catalog."default",
     type text COLLATE pg_catalog."default",

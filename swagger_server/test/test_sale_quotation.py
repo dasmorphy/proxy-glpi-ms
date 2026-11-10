@@ -252,10 +252,12 @@ class TestSerializeSaleQuotation(unittest.TestCase):
         items = result["items"]
         self.assertEqual([107, 271], [c["material_id"] for c in items[0]["components"]])
         self.assertEqual(10.5, items[0]["components"][0]["total"])
-        self.assertEqual([270], [c["material_id"] for c in items[2]["components"]])
-        self.assertEqual("Instalación", items[1]["description"])
-        self.assertTrue(items[1]["is_labor"])
-        self.assertFalse(items[1]["is_new"])
+        # La mano de obra queda al final; el resto mantiene su orden
+        self.assertEqual([1, 3, 2], [item["id_item"] for item in items])
+        self.assertEqual([270], [c["material_id"] for c in items[1]["components"]])
+        self.assertEqual("Instalación", items[2]["description"])
+        self.assertTrue(items[2]["is_labor"])
+        self.assertFalse(items[2]["is_new"])
         self.assertEqual(1.0, items[0]["quantity"])
 
     def test_without_quotation_returns_none(self):

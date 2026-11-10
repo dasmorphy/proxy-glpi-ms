@@ -650,6 +650,16 @@ class GlpiProxyView(MethodView):
 
         return response, status_code
 
+    def approve_support(self, body=None):
+        return self._run_json_request(
+            "approve_support",
+            lambda data, internal, external: self.internal_management_use_case.approve_support(
+                data, internal, external
+            ),
+            "Soporte aprobado correctamente",
+            read_body=True,
+        )
+
     def approve_ticket_commercial(self, body=None):
         internal_process = (None, None)
         function_name = "approve_ticket_commercial"
@@ -855,6 +865,28 @@ class GlpiProxyView(MethodView):
                 )
             },
             "Entrega registrada correctamente",
+            read_body=True,
+        )
+
+    def return_to_commercial(self, body=None):
+        return self._run_json_request(
+            "return_to_commercial",
+            lambda data, internal, external: self.internal_management_use_case.return_to_commercial(
+                data, internal, external
+            ),
+            "Registro devuelto a Comercial",
+            read_body=True,
+        )
+
+    def post_provider(self, body=None):
+        return self._run_json_request(
+            "post_provider",
+            lambda data, internal, external: {
+                "id_provider": self.internal_management_use_case.post_provider(
+                    data, internal, external
+                )
+            },
+            "Proveedor registrado correctamente",
             read_body=True,
         )
 

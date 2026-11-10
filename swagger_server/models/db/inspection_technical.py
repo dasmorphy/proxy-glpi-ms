@@ -46,6 +46,7 @@ class InspectionTechnical(Base):
     responsible_id = Column(Uuid)
     responsible_name = Column(Text)
     sales_user = Column(Text)
+    approve_support = Column(Boolean)
 
     created_by = Column(Text)
     updated_by = Column(Text)
