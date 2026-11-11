@@ -878,6 +878,16 @@ class GlpiProxyView(MethodView):
             read_body=True,
         )
 
+    def return_to_technical(self, body=None):
+        return self._run_json_request(
+            "return_to_technical",
+            lambda data, internal, external: self.internal_management_use_case.return_to_technical(
+                data, internal, external
+            ),
+            "Registro devuelto a Técnica",
+            read_body=True,
+        )
+
     def post_provider(self, body=None):
         return self._run_json_request(
             "post_provider",

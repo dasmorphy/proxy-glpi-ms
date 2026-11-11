@@ -45,6 +45,11 @@ from swagger_server.utils.inspection_documents import (
 class InternalManagementRepository:
     COMMERCIAL_STATUS_APPROVED = 5
     COMMERCIAL_STATUS_PENDING = 7
+    # Congelada mientras el registro está devuelto en Técnica (sección 6 de la doc)
+    COMMERCIAL_STATUS_RETURNED_TECHNICAL = 9
+    TECHNICAL_STATUS_PENDING_APPROVAL = "Pendiente aprobación"
+    TECHNICAL_STATUS_RETURNED = "Devuelto"
+    INSPECTION_STATUS_RETURNED_TECHNICAL = "Devuelto a Técnica"
     FOLLOWUP_TYPE_PENDING = "Pendiente"
     FOLLOWUP_TYPE_REGISTERED = "Registrado"
     INSPECTION_TYPE = "Inspección"
@@ -644,6 +649,9 @@ class InternalManagementRepository:
                         created_by=body.get('user')
                     )
                     session.add(new_history_area)
+                    self._resume_returned_commercial(
+                        session, inspection.id_inspection, body.get('user')
+                    )
 
                 session.commit()
             except Exception as exception:
@@ -830,6 +838,21 @@ class InternalManagementRepository:
                     raise CustomAPIException("Inspección no encontrada", 404)
                 # Las Asistencias aprobadas sí pasan por Comercial
                 self._ensure_follows_flow(ticket)
+                latest = self._get_latest_management(
+                    session,
+                    CommercialTicketManagement,
+                    ticket.id_inspection,
+                    CommercialTicketManagement.id_management_commercial,
+                )
+                if (
+                    latest is not None
+                    and latest.status_id == self.COMMERCIAL_STATUS_RETURNED_TECHNICAL
+                ):
+                    raise CustomAPIException(
+                        "El registro está devuelto a Técnica; no se puede registrar "
+                        "la gestión comercial hasta que Técnica lo vuelva a aprobar",
+                        400,
+                    )
 
                 if body.get('status_id') == 5: 
                     ticket.management_area = 'Proyectos'
@@ -1403,6 +1426,7 @@ class InternalManagementRepository:
                 if management is None:
                     raise CustomAPIException("Gestión técnica no encontrada", 404)
 
+                was_returned = management.status == self.TECHNICAL_STATUS_RETURNED
                 self._apply_fields(
                     management,
                     body,
@@ -1411,6 +1435,9 @@ class InternalManagementRepository:
                         "status": "status",
                     },
                 )
+                if was_returned and not body.get("status"):
+                    # Corregido por el técnico: vuelve a la cola de aprobación
+                    management.status = self.TECHNICAL_STATUS_PENDING_APPROVAL
                 self._set_updated_by(body, management)
 
                 if "materials" in body:
@@ -1430,6 +1457,9 @@ class InternalManagementRepository:
                     )
 
                     session.add(new_history_area)
+                    self._resume_returned_commercial(
+                        session, ticket.id_inspection, body.get('user')
+                    )
 
 
                 self._save_inspection_documents(
@@ -1466,6 +1496,15 @@ class InternalManagementRepository:
                 )
                 if management is None:
                     raise CustomAPIException("Gestión comercial no encontrada", 404)
+                if (
+                    management.status_id == self.COMMERCIAL_STATUS_RETURNED_TECHNICAL
+                    or ticket.management_area == "Técnica"
+                ):
+                    raise CustomAPIException(
+                        "El registro está devuelto a Técnica; no se puede editar "
+                        "hasta que Técnica lo vuelva a aprobar",
+                        400,
+                    )
 
                 # Aprobada, perdida, etc. ya no se edita: la proforma aprobada alimenta a bodega
                 # if management.status_id != self.COMMERCIAL_STATUS_PENDING:
@@ -1677,6 +1716,9 @@ class InternalManagementRepository:
                     )
                     session.add(new_history_area)
 
+                self._resume_returned_commercial(
+                    session, inspection.id_inspection, body.get("user")
+                )
                 session.commit()
             except Exception as exception:
                 session.rollback()
@@ -1937,35 +1979,7 @@ class InternalManagementRepository:
                 if management.status_id != self.COMMERCIAL_STATUS_APPROVED:
                     raise CustomAPIException("La gestión comercial no está aprobada", 400)
 
-                # Las entregas referencian las líneas de la proforma: no se podría editar
-                delivered = session.execute(
-                    select(exists().where(
-                        MaterialDeliveryHistory.quote_id == SaleQuotation.id_quote,
-                        SaleQuotation.inspection_id == inspection.id_inspection,
-                    ))
-                ).scalar()
-                if delivered:
-                    raise CustomAPIException(
-                        "La proforma ya tiene materiales entregados; "
-                        "no se puede devolver a Comercial",
-                        400,
-                    )
-
-                financial_statuses = session.execute(
-                    select(FinancialTicketManagement.status).where(
-                        FinancialTicketManagement.ticket_id == inspection.id_inspection
-                    )
-                ).scalars().all()
-                if "Cobrada" in financial_statuses:
-                    raise CustomAPIException(
-                        "El registro tiene facturas cobradas; no se puede devolver", 400
-                    )
-                if financial_statuses:
-                    raise CustomAPIException(
-                        "El registro tiene gestiones financieras registradas; "
-                        "elimínelas antes de devolverlo a Comercial",
-                        400,
-                    )
+                self._ensure_returnable(session, inspection.id_inspection, "Comercial")
 
                 user = data.get("user")
                 management.status_id = self.COMMERCIAL_STATUS_PENDING
@@ -1978,6 +1992,7 @@ class InternalManagementRepository:
                     ticket_id=inspection.id_inspection,
                     previous_area=previous_area,
                     current_area="Comercial",
+                    reason=data["reason"],
                     created_by=user,
                 ))
                 session.add(CommercialFollowup(
@@ -2000,6 +2015,160 @@ class InternalManagementRepository:
                     internal,
                     external,
                 )
+
+    def return_to_technical(self, data, internal, external):
+        """Devuelve a Técnica un registro que está en Comercial y cuya gestión
+        comercial no está aprobada. El registro técnico queda Devuelto para
+        corregirlo y la gestión comercial queda congelada; la proforma y sus
+        pendientes se conservan (sección 6 de docs/logica-negocio.md)."""
+        with self.db_telearseg.session_factory() as session:
+            try:
+                inspection = self._get_inspection(session, data["inspection_id"])
+                if inspection.status == "Finalizado":
+                    raise CustomAPIException(
+                        "El registro está finalizado; no se puede devolver", 400
+                    )
+                if inspection.management_area == "Técnica":
+                    raise CustomAPIException("El registro ya está en Técnica", 400)
+                if inspection.management_area != "Comercial":
+                    raise CustomAPIException(
+                        "Solo se pueden devolver a Técnica registros de Comercial", 400
+                    )
+
+                technical = session.execute(
+                    select(TechnicalTicketManagement)
+                    .where(TechnicalTicketManagement.inspection_id == inspection.id_inspection)
+                    .order_by(TechnicalTicketManagement.id_management_technical.desc())
+                ).scalars().first()
+                if technical is None:
+                    # Ej: Asistencias aprobadas, que pasan directo a Comercial
+                    raise CustomAPIException(
+                        "El registro no tiene registro técnico; no se puede devolver a Técnica",
+                        400,
+                    )
+
+                management = self._get_latest_management(
+                    session,
+                    CommercialTicketManagement,
+                    inspection.id_inspection,
+                    CommercialTicketManagement.id_management_commercial,
+                )
+                if management is None:
+                    raise CustomAPIException("Gestión comercial no encontrada", 404)
+                if management.status_id == self.COMMERCIAL_STATUS_APPROVED:
+                    raise CustomAPIException(
+                        "La gestión comercial está aprobada; no se puede devolver a Técnica",
+                        400,
+                    )
+                if management.status_id == self.COMMERCIAL_STATUS_RETURNED_TECHNICAL:
+                    raise CustomAPIException("El registro ya fue devuelto a Técnica", 400)
+
+                # El proyecto se armó con una proforma aprobada antes
+                has_project = session.execute(
+                    select(exists().where(
+                        TaskTechnical.inspection_id == inspection.id_inspection
+                    ))
+                ).scalar()
+                if has_project:
+                    raise CustomAPIException(
+                        "El registro ya tiene un proyecto; no se puede devolver a Técnica",
+                        400,
+                    )
+                self._ensure_returnable(session, inspection.id_inspection, "Técnica")
+
+                user = data.get("user")
+                technical.status = self.TECHNICAL_STATUS_RETURNED
+                technical.updated_by = user
+                management.status_id = self.COMMERCIAL_STATUS_RETURNED_TECHNICAL
+                management.updated_by = user
+                inspection.status = self.INSPECTION_STATUS_RETURNED_TECHNICAL
+                inspection.management_area = "Técnica"
+                inspection.next_area = "Comercial"
+                inspection.updated_by = user
+                inspection.updated_at = datetime.now()
+                session.add(HistoryAreaTicket(
+                    ticket_id=inspection.id_inspection,
+                    previous_area="Comercial",
+                    current_area="Técnica",
+                    reason=data["reason"],
+                    created_by=user,
+                ))
+                session.add(CommercialFollowup(
+                    management_commercial_id=management.id_management_commercial,
+                    observations=f"Devuelto a Técnica: {data['reason']}",
+                    created_by=user,
+                ))
+                session.commit()
+                return {
+                    "inspection_id": inspection.id_inspection,
+                    "management_area": inspection.management_area,
+                    "technical_status": technical.status,
+                    "commercial_status_id": management.status_id,
+                }
+            except Exception as exception:
+                session.rollback()
+                self._raise_database_error(
+                    exception,
+                    "Error al devolver el registro a Técnica",
+                    internal,
+                    external,
+                )
+
+    @staticmethod
+    def _ensure_returnable(session, inspection_id, target_area):
+        """Validaciones comunes de las devoluciones: sin entregas ni gestiones
+        financieras."""
+        # Las entregas referencian las líneas de la proforma: no se podría editar
+        delivered = session.execute(
+            select(exists().where(
+                MaterialDeliveryHistory.quote_id == SaleQuotation.id_quote,
+                SaleQuotation.inspection_id == inspection_id,
+            ))
+        ).scalar()
+        if delivered:
+            raise CustomAPIException(
+                "La proforma ya tiene materiales entregados; "
+                f"no se puede devolver a {target_area}",
+                400,
+            )
+
+        financial_statuses = session.execute(
+            select(FinancialTicketManagement.status).where(
+                FinancialTicketManagement.ticket_id == inspection_id
+            )
+        ).scalars().all()
+        if "Cobrada" in financial_statuses:
+            raise CustomAPIException(
+                "El registro tiene facturas cobradas; no se puede devolver", 400
+            )
+        if financial_statuses:
+            raise CustomAPIException(
+                "El registro tiene gestiones financieras registradas; "
+                f"elimínelas antes de devolverlo a {target_area}",
+                400,
+            )
+
+    def _resume_returned_commercial(self, session, inspection_id, user):
+        """Al volver a aprobar Técnica, la gestión comercial congelada pasa a
+        Pendiente para que Comercial revise la proforma."""
+        management = self._get_latest_management(
+            session,
+            CommercialTicketManagement,
+            inspection_id,
+            CommercialTicketManagement.id_management_commercial,
+        )
+        if (
+            management is None
+            or management.status_id != self.COMMERCIAL_STATUS_RETURNED_TECHNICAL
+        ):
+            return
+        management.status_id = self.COMMERCIAL_STATUS_PENDING
+        management.updated_by = user
+        session.add(CommercialFollowup(
+            management_commercial_id=management.id_management_commercial,
+            observations="Aprobado nuevamente por Técnica; revisar la proforma",
+            created_by=user,
+        ))
 
     def new_followup_commercial(self, body, internal, external):
         with self.db_telearseg.session_factory() as session:
@@ -2135,11 +2304,12 @@ class InternalManagementRepository:
                 if filters.get("type"):
                     conditions.append(self._type_condition(filters["type"]))
                 if filters.get("pending_technical") == 'true':
-                    # Sin registro técnico asociado (LEFT JOIN sin coincidencia);
-                    # las de Soporte no continúan el flujo
-                    conditions.append(
-                        TechnicalTicketManagement.id_management_technical.is_(None)
-                    )
+                    # Sin registro técnico asociado (LEFT JOIN sin coincidencia) o
+                    # devuelto desde Comercial; las de Soporte no continúan el flujo
+                    conditions.append(or_(
+                        TechnicalTicketManagement.id_management_technical.is_(None),
+                        TechnicalTicketManagement.status == self.TECHNICAL_STATUS_RETURNED,
+                    ))
                     conditions.append(self._not_support())
 
                 if filters.get("pending_commercial") == 'true':
@@ -2244,10 +2414,19 @@ class InternalManagementRepository:
                 pending_technical = count_inspections(
                     # Las Asistencias aprobadas pasan directo a Comercial
                     self._not_support(),
-                    ~exists().where(
-                        TechnicalTicketManagement.inspection_id
-                        == InspectionTechnical.id_inspection
-                    )
+                    or_(
+                        ~exists().where(
+                            TechnicalTicketManagement.inspection_id
+                            == InspectionTechnical.id_inspection
+                        ),
+                        # Devueltas desde Comercial
+                        exists().where(
+                            TechnicalTicketManagement.inspection_id
+                            == InspectionTechnical.id_inspection,
+                            TechnicalTicketManagement.status
+                            == self.TECHNICAL_STATUS_RETURNED,
+                        ),
+                    ),
                 )
                 pending_commercial = count_inspections(
                     InspectionTechnical.status == "Listo para cotizar",

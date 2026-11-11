@@ -99,8 +99,8 @@ class TestReturnToCommercial(unittest.TestCase):
                              (inspection.management_area, inspection.next_area))
             self.assertEqual("dmales", session.get(CommercialTicketManagement, 9).updated_by)
             history = session.execute(select(HistoryAreaTicket)).scalar_one()
-            self.assertEqual(("Financiera", "Comercial"),
-                             (history.previous_area, history.current_area))
+            self.assertEqual(("Financiera", "Comercial", "Cambios del cliente"),
+                             (history.previous_area, history.current_area, history.reason))
             followup = session.execute(select(CommercialFollowup)).scalar_one()
             self.assertEqual(9, followup.management_commercial_id)
             self.assertIn("Cambios del cliente", followup.observations)

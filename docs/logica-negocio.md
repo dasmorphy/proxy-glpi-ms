@@ -15,6 +15,7 @@ cambian). Salvo que se indique otra cosa, están en
 3. [Tipo de inspección (Soporte)](#3-tipo-de-inspección-soporte)
 4. [Registro de proveedores](#4-registro-de-proveedores)
 5. [Devolver un registro a Comercial](#5-devolver-un-registro-a-comercial)
+6. [Devolver un registro a Técnica](#6-devolver-un-registro-a-técnica)
 
 ---
 
@@ -326,6 +327,9 @@ los `NULL`.
   usan `get_dashboard_counts` y `get_dashboard_area_times`, así que los
   Soportes (y Asistencias sin aprobar) no cuentan en pendientes, finalizados,
   cotizaciones, facturas, SLA ni tiempos por área.
+- Dashboard `pending_technical` y `GET /inspection?pending_technical=true`: en el
+  flujo y sin registro técnico **o** con el registro técnico en `Devuelto`
+  (sección 6).
 - Dashboard `pending_commercial`: mismo conteo que
   `GET /inspection?pending_commercial=true` (en el flujo, `status = 'Listo para
   cotizar'` y sin registro comercial). Las que siguen en Técnica no cuentan.
@@ -397,7 +401,8 @@ se hacía con cambios manuales en la base.
 
 - Gestión comercial → `status_id = 7` (Pendiente), `updated_by = user`.
 - Inspección → `management_area = 'Comercial'`, `next_area = 'Proyectos'`.
-- `history_area_ticket`: `previous_area` (Proyectos/Financiera) → `Comercial`.
+- `history_area_ticket`: `previous_area` (Proyectos/Financiera) → `Comercial`, con
+  el motivo en `reason`.
 - `commercial_followup` con `"Devuelto a Comercial desde <área>: <motivo>"`.
 - **No se tocan** la proforma, los pendientes ni el proyecto (`task_technical`).
   Al editar la proforma, `save_sale_quotation` re-vincula los pendientes (sección 1).
@@ -410,3 +415,89 @@ Responde `data`: `{inspection_id, previous_area, management_area, commercial_sta
 ### Tests
 
 `swagger_server/test/test_return_to_commercial.py`.
+
+---
+
+## 6. Devolver un registro a Técnica
+
+### Propósito
+
+Un registro que está en Comercial, con una gestión comercial **no aprobada**, vuelve
+a Técnica para corregir el registro técnico (materiales, descripción). No se borra
+nada: la gestión comercial, la proforma, los pendientes y los documentos se
+conservan, y la gestión comercial queda **congelada** hasta que Técnica la vuelva a
+aprobar.
+
+### Disparador
+
+`POST /return-to-technical` (`return_to_technical`). Body:
+`{"data": {"inspection_id", "reason", "user"}, "channel", "externalTransactionId"}`.
+
+### Validaciones (en orden)
+
+| Regla | Respuesta |
+|---|---|
+| `inspection_id` entero, `reason` con texto (use case, `_return_payload`) | 400 |
+| La inspección existe | 404 |
+| `status` distinto de `Finalizado` | 400 |
+| `management_area = 'Comercial'` | 400 (`ya está en Técnica` / `Solo se pueden devolver a Técnica registros de Comercial`) |
+| Tiene registro técnico (las Asistencias aprobadas no tienen) | 400 |
+| Última gestión comercial existe, no está Aprobada (5) ni ya devuelta (9) | 404 / 400 |
+| No hay proyecto (`task_technical`): se armó con una proforma aprobada antes | 400 |
+| Sin entregas ni gestiones financieras (`_ensure_returnable`, compartida con la sección 5) | 400 |
+
+### Efectos (una transacción)
+
+- Registro técnico → `status = 'Devuelto'`. Se ve en `GET /register-technical`.
+- Gestión comercial → `status_id = 9` (`Devuelto a Técnica`, migración al final de
+  `scripts.sql`).
+- Inspección → `status = 'Devuelto a Técnica'`, `management_area = 'Técnica'`,
+  `next_area = 'Comercial'`.
+- `history_area_ticket`: Comercial → Técnica, con el motivo en `reason` (columna
+  agregada al final de `scripts.sql`; `NULL` en los avances normales).
+- `commercial_followup` con `"Devuelto a Técnica: <motivo>"`.
+
+El motivo se consulta con `GET /history-area-ticket/{id_inspection}` (incluye
+`reason`): el front toma el último registro Comercial → Técnica. No hay un endpoint
+propio para esto.
+
+### Mientras está devuelto
+
+- `PUT /register-commercial` responde 400 (gestión en 9 o inspección en Técnica).
+- `POST /register-commercial` responde 400 si la última gestión está en 9.
+- `approve-commercial-ticket` y `return-to-commercial` ya lo rechazan (exigen
+  Aprobada / Proyectos-Financiera).
+- Cuenta en `pending_technical` del dashboard y de `GET /inspection`.
+
+### Corrección y nueva aprobación
+
+`Devuelto` → (`PUT /register-technical` sin `status`) → `Pendiente aprobación` →
+(`approve_technical_inspection`) → `Aprobado`. Al aprobar, la inspección vuelve a
+Comercial con "Listo para cotizar" y `_resume_returned_commercial` pasa la gestión
+comercial de 9 a Pendiente (7), con el seguimiento "Aprobado nuevamente por Técnica;
+revisar la proforma". Lo mismo ocurre si el registro pasa a Comercial por
+`update_ticket_technical` o `update_inspection_technical` con "Listo para cotizar".
+No aparece en `pending_commercial` (exige no tener gestión comercial): se ve en
+`/register-commercial` como Pendiente.
+
+### Impacto de los cambios del técnico en los materiales
+
+Como la gestión no está aprobada, no hay proyecto, entregas ni facturas. Los
+pendientes siguen las reglas de la sección 1:
+
+- Producto del catálogo agregado o editado: la proforma no cambia hasta que
+  Comercial la edite.
+- Producto nuevo agregado: crea un pendiente `Pendiente` sin proforma. Si Comercial
+  no lo incluye al editar, pasa a `Eliminado de proforma`.
+- Producto nuevo editado: el pendiente (sin `quote_id` y no `Creado`) toma los
+  cambios. La línea de la proforma conserva los datos anteriores hasta que se edite.
+- Producto nuevo quitado, o cambiado por uno del catálogo: la línea de la proforma
+  pierde `material_tech_ticket_id` y el pendiente se elimina, salvo que ya esté
+  `Creado`; en ese caso solo se desvincula y el stock ingresado no se revierte.
+  **Riesgo:** si Comercial aprueba sin editar la proforma, la línea suelta genera un
+  pendiente nuevo. Por eso la gestión vuelve a Pendiente con un seguimiento que pide
+  revisar la proforma.
+
+### Tests
+
+`swagger_server/test/test_return_to_technical.py`.

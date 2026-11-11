@@ -1176,3 +1176,16 @@ ALTER TABLE internal_management.inspection_technical
     ADD COLUMN IF NOT EXISTS type text,
     ADD COLUMN IF NOT EXISTS start_date timestamp without time zone,
     ADD COLUMN IF NOT EXISTS end_date timestamp without time zone;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+-- DEVOLVER UN REGISTRO DE COMERCIAL A TÉCNICA (ver docs/logica-negocio.md, sección 6)
+-- La gestión comercial queda congelada en este estado hasta que Técnica la vuelva a aprobar.
+INSERT INTO internal_management.commmercial_ticket_status (id_status, name, created_by)
+VALUES (9, 'Devuelto a Técnica', 'dmales')
+ON CONFLICT (id_status) DO NOTHING;
+
+-- Motivo de las devoluciones (a Comercial / a Técnica) en el historial de áreas
+ALTER TABLE internal_management.history_area_ticket
+    ADD COLUMN IF NOT EXISTS reason text;

@@ -1694,6 +1694,60 @@ paths:
         "500":
           $ref: "#/components/responses/ErrorResponse"
       x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
+  /return-to-technical:
+    post:
+      tags:
+      - Tickets Management
+      summary: Devuelve a Técnica un registro que está en Comercial
+      description: >-
+        El registro técnico queda en estado Devuelto para corregirlo y la
+        gestión comercial en "Devuelto a Técnica" (no editable) hasta que
+        Técnica lo vuelva a aprobar. Se rechaza si la gestión comercial está
+        aprobada, si hay proyecto, materiales entregados o gestiones
+        financieras, o si el registro está finalizado. La gestión comercial,
+        la proforma y sus pendientes se conservan.
+      operationId: return_to_technical
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                data:
+                  type: object
+                  required:
+                  - inspection_id
+                  - reason
+                  properties:
+                    inspection_id:
+                      type: integer
+                      example: 45
+                    reason:
+                      type: string
+                      example: Faltan materiales en el registro técnico
+                    user:
+                      nullable: true
+                      type: string
+                      example: dmales
+                channel:
+                  type: string
+                  example: TLSG_WEB
+                externalTransactionId:
+                  type: string
+                  example: fcea920f7412b5da7be0cf42b8c93759
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+      x-openapi-router-controller: swagger_server.controllers.glpi_proxy_controller.GlpiProxyView
   /approve-commercial-ticket:
     post:
       tags:
@@ -2270,7 +2324,10 @@ paths:
       tags:
       - Tickets Management
       summary: Obtiene el historial de las areas por ticket
-      description: Devuelve el historial de area de la base
+      description: >-
+        Devuelve el historial de áreas del ticket, del más reciente al más
+        antiguo. `reason` trae el motivo en las devoluciones (a Comercial o a
+        Técnica) y es null en los avances normales.
       operationId: get_history_area
       parameters:
         - name: id_inspection

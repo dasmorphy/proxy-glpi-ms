@@ -28,6 +28,8 @@ class HistoryAreaTicket(Base):
 
     previous_area = Column(Text)
     current_area = Column(Text)
-    
+    # Motivo de las devoluciones (a Comercial / a Técnica); NULL en los avances normales
+    reason = Column(Text)
+
     created_at = Column(DateTime, server_default=func.now())
     created_by = Column(Text)

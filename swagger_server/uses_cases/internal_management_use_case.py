@@ -549,6 +549,7 @@ class InternalManagementUseCase:
                 "ticket_id": c.ticket_id,
                 "previous_area": c.previous_area,
                 "current_area": c.current_area,
+                "reason": c.reason,
                 "created_at": c.created_at,
                 "created_by": c.created_by,
             }
@@ -622,19 +623,25 @@ class InternalManagementUseCase:
         )
 
     def return_to_commercial(self, body, internal, external):
+        return self.internal_management_repository.return_to_commercial(
+            self._return_payload(body), internal, external
+        )
+
+    def return_to_technical(self, body, internal, external):
+        return self.internal_management_repository.return_to_technical(
+            self._return_payload(body), internal, external
+        )
+
+    def _return_payload(self, body):
         body = body or {}
         reason = self._optional_text(body.get("reason"))
         if not reason:
             raise CustomAPIException("Ingrese el motivo de la devolución", 400)
-        return self.internal_management_repository.return_to_commercial(
-            {
-                "inspection_id": self._required_int(body.get("inspection_id"), "inspection_id"),
-                "reason": reason,
-                "user": self._optional_text(body.get("user")),
-            },
-            internal,
-            external,
-        )
+        return {
+            "inspection_id": self._required_int(body.get("inspection_id"), "inspection_id"),
+            "reason": reason,
+            "user": self._optional_text(body.get("user")),
+        }
 
     def new_followup_commercial(self, body, internal, external):
         return self.internal_management_repository.new_followup_commercial(
