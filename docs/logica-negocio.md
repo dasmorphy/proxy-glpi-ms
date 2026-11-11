@@ -322,10 +322,13 @@ los `NULL`.
 - `GET /inspection`: `pending_technical=true` y `pending_commercial=true`
   excluyen Soporte (también `pending_commercial` de `GET /register-technical`).
   Filtro opcional `type=Inspección|Soporte`.
-- Dashboard: `_dashboard_inspection_conditions` (fechas + `_not_support()`) lo
+- Dashboard: `_dashboard_inspection_conditions` (fechas + `_in_flow()`) lo
   usan `get_dashboard_counts` y `get_dashboard_area_times`, así que los
-  Soportes no cuentan en pendientes, finalizados, cotizaciones, facturas, SLA
-  ni tiempos por área.
+  Soportes (y Asistencias sin aprobar) no cuentan en pendientes, finalizados,
+  cotizaciones, facturas, SLA ni tiempos por área.
+- Dashboard `pending_commercial`: mismo conteo que
+  `GET /inspection?pending_commercial=true` (en el flujo, `status = 'Listo para
+  cotizar'` y sin registro comercial). Las que siguen en Técnica no cuentan.
 
 ### Front (pw-tickets)
 

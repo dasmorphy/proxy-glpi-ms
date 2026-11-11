@@ -235,8 +235,23 @@ class TestInspectionType(unittest.TestCase):
 
         # La de Soporte no cuenta; la antigua (type NULL) sí
         self.assertEqual(2, counts["pending_technical"])
-        self.assertEqual(2, counts["pending_commercial"])
+        # Solo la "Listo para cotizar" está pendiente de Comercial
+        self.assertEqual(1, counts["pending_commercial"])
         self.assertEqual(1, counts["finished_technical"])
+
+    def test_dashboard_pending_commercial_matches_inspection_filter(self):
+        # Mismas condiciones que GET /inspection?pending_commercial=true
+        ready = create(self.repository, status="Listo para cotizar")
+        create(self.repository, status="Listo para cotizar")
+        create(self.repository)  # aún en Técnica
+        self.repository.post_ticket_commercial(
+            {"inspection_id": ready.id_inspection, "user": "dmales"},
+            "i", "e", files=[],
+        )
+
+        counts = self.repository.get_dashboard_counts({}, "i", "e")
+
+        self.assertEqual(1, counts["pending_commercial"])
 
 
 class TestInspectionTypeFilters(unittest.TestCase):

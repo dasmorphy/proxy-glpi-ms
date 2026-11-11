@@ -2250,6 +2250,7 @@ class InternalManagementRepository:
                     )
                 )
                 pending_commercial = count_inspections(
+                    InspectionTechnical.status == "Listo para cotizar",
                     ~exists().where(
                         CommercialTicketManagement.ticket_id
                         == InspectionTechnical.id_inspection
