@@ -12,7 +12,7 @@ cambian). Salvo que se indique otra cosa, están en
 
 1. [Materiales pendientes de creación](#1-materiales-pendientes-de-creación)
 2. [Documentos de la inspección](#2-documentos-de-la-inspección)
-3. [Tipo de inspección (Soporte)](#3-tipo-de-inspección-soporte)
+3. [Tipo de inspección (Soporte / Asistencia)](#3-tipo-de-inspección-soporte--asistencia)
 4. [Registro de proveedores](#4-registro-de-proveedores)
 5. [Devolver un registro a Comercial](#5-devolver-un-registro-a-comercial)
 6. [Devolver un registro a Técnica](#6-devolver-un-registro-a-técnica)
@@ -290,56 +290,96 @@ también al editar.
 
 ---
 
-## 3. Tipo de inspección (Soporte)
+## 3. Tipo de inspección (Soporte / Asistencia)
 
 ### Propósito
 
-`inspection_technical.type` distingue una **Inspección** (flujo completo:
-Técnica → Comercial → Proyectos → Financiera) de un **Soporte**, que solo se
-registra en `inspection_technical` y no continúa a las siguientes áreas.
-Valores: `Inspección` | `Soporte`. `NULL` (inspecciones antiguas) se trata
-como Inspección; por eso los filtros usan `_not_support()`
-(`type IS DISTINCT FROM 'Soporte'`) y no `type != 'Soporte'`, que descartaría
-los `NULL`.
+`inspection_technical.type` distingue:
+
+- **Inspección**: flujo completo Técnica → Comercial → Proyectos → Financiera.
+- **Asistencia**: **mismo flujo que la Inspección** (registro técnico con
+  materiales, aprobación técnica, Comercial…). Solo cambia que usa fecha inicio
+  y fin, y que en el front se aprueba desde la bandeja "Soportes / Asistencias".
+- **Soporte**: solo se registra en `inspection_technical` y no continúa a las
+  siguientes áreas.
+
+`NULL` (inspecciones antiguas) se trata como Inspección; por eso `_in_flow()` usa
+`type IS DISTINCT FROM 'Soporte'` y no `type != 'Soporte'`, que descartaría los
+`NULL`. `SUPPORT_TYPES` (Soporte y Asistencia) solo se usa para las fechas.
 
 ### Reglas
 
 - `post_inspection_technical`: `type` se valida con `_inspection_type`
   (vacío → Inspección; otro valor → 400). Un Soporte queda en
   `management_area = 'Técnica'` con `next_area = NULL`, aunque llegue con
-  estado "Listo para cotizar" (el estado se guarda, el área no cambia).
-- Un Soporte usa `start_date` y `end_date` en lugar de `commitment_date`:
-  ambas obligatorias y `end_date >= start_date` (`_validate_support_dates`,
-  en POST y PUT, sobre el registro resultante). Las fechas ISO con zona se
-  guardan en UTC sin zona (`_parse_datetime`), igual que `commitment_date`
-  al editar.
+  estado "Listo para cotizar" (el estado se guarda, el área no cambia). La
+  Asistencia toma las áreas igual que una Inspección.
+- Soporte y Asistencia usan `start_date` y `end_date` en lugar de
+  `commitment_date`: ambas obligatorias y `end_date >= start_date`
+  (`_validate_support_dates`, en POST y PUT, sobre el registro resultante). Las
+  fechas ISO con zona se guardan en UTC sin zona (`_parse_datetime`), igual que
+  `commitment_date` al editar.
 - `update_inspection_technical`: acepta `type`. "Listo para cotizar" no mueve
   un Soporte a Comercial. Pasar a Soporte da 400 si la inspección ya avanzó
   (`_inspection_started_flow`: salió de Técnica o tiene registro técnico o
-  comercial). Pasar de Soporte a Inspección se permite y restaura
-  `next_area = 'Comercial'`.
-- `post_ticket_technical` y `post_ticket_commercial` rechazan un Soporte con
-  400 (`_ensure_not_support`).
+  comercial) y deja `approve_support = false`, `next_area = NULL`. Pasar de
+  Soporte a Inspección/Asistencia estando en Técnica restaura
+  `next_area = 'Comercial'` y `approve_support = false`.
+- `post_ticket_technical`, `post_ticket_commercial` y
+  `approve_technical_inspection` rechazan un Soporte con 400
+  (`_ensure_not_support`). La Asistencia los acepta.
+- Aprobación:
+  - Soporte: `POST /approve-support` → `approve_support = true`; se queda en
+    Técnica. Una Asistencia ahí responde 400.
+  - Asistencia: `approve_technical_inspection` (igual que una Inspección: registro
+    técnico `Aprobado`, inspección "Listo para cotizar" → Comercial) y además
+    `approve_support = true`, para que el front la muestre aprobada.
+- **Asistencias antiguas**: antes se aprobaban con `/approve-support` y pasaban a
+  Comercial sin registro técnico. Siguen en su área;
+  `_legacy_approved_assistance()` (Asistencia con `approve_support = true`) las
+  excluye de `pending_technical` cuando no tienen registro técnico.
+- `GET /register-technical`:
+  - `type` (uno o varios, `_type_condition`).
+  - `responsible` (lo envía el front para el rol técnico): `responsible_id =
+    responsible` y las **Asistencias solo salen si `management_status` no es
+    `Completado`** (incluye `NULL`). Las Inspecciones no se filtran por
+    `management_status`. Sin `responsible` (otros roles) sale todo.
+  - `pending_commercial` excluye el Soporte.
 - `GET /inspection`: `pending_technical=true` y `pending_commercial=true`
-  excluyen Soporte (también `pending_commercial` de `GET /register-technical`).
-  Filtro opcional `type=Inspección|Soporte`.
+  excluyen el Soporte (`_in_flow()`). Filtro opcional
+  `type=Inspección|Soporte|Asistencia`; `pending_approve_support=true` →
+  `approve_support` no es `true` (el front lo usa solo con `type=Soporte`). Con
+  `responsible_id` o `responsible` (consulta de un técnico) se aplica la misma regla
+  que en `/register-technical`: las Asistencias en `management_status = 'Completado'`
+  no salen (`_not_completed_assistance()`).
 - Dashboard: `_dashboard_inspection_conditions` (fechas + `_in_flow()`) lo
   usan `get_dashboard_counts` y `get_dashboard_area_times`, así que los
-  Soportes (y Asistencias sin aprobar) no cuentan en pendientes, finalizados,
-  cotizaciones, facturas, SLA ni tiempos por área.
+  Soportes no cuentan en pendientes, finalizados, cotizaciones, facturas, SLA
+  ni tiempos por área. Las Asistencias cuentan como una Inspección.
 - Dashboard `pending_technical` y `GET /inspection?pending_technical=true`: en el
-  flujo y sin registro técnico **o** con el registro técnico en `Devuelto`
-  (sección 6).
+  flujo y sin registro técnico (salvo Asistencias antiguas aprobadas) **o** con
+  el registro técnico en `Devuelto` (sección 6).
 - Dashboard `pending_commercial`: mismo conteo que
   `GET /inspection?pending_commercial=true` (en el flujo, `status = 'Listo para
   cotizar'` y sin registro comercial). Las que siguen en Técnica no cuentan.
 
 ### Front (pw-tickets)
 
-`inspection-form`: dropdown "Tipo" (`Inspección` por defecto). Al editar se carga el
-`type` guardado; si no, el formulario reenviaría `Inspección` y convertiría un Soporte.
-Con Soporte se ocultan "Fecha compromiso" y se muestran "Fecha inicio" y "Fecha fin"
-(obligatorias); al guardar se envía en `null` la fecha que no corresponde al tipo.
+- `inspection-form`: dropdown "Tipo" (`Inspección` por defecto). Al editar se carga
+  el `type` guardado; si no, el formulario reenviaría `Inspección` y convertiría un
+  Soporte. Con Soporte o Asistencia se ocultan "Fecha compromiso" y se muestran
+  "Fecha inicio" y "Fecha fin" (obligatorias); al guardar se envía en `null` la
+  fecha que no corresponde al tipo.
+- `tickets-technical`: la Asistencia aparece en pendientes para "Registro" (formulario
+  de materiales). El técnico consulta `/register-technical` con `responsible`.
+- `inspections-approval` ("Por aprobar"):
+  - Pestaña Inspecciones: `/register-technical` con `type=Inspección`.
+  - Pestaña Soportes / Asistencias: Soportes de `/inspection`
+    (`type=Soporte&pending_approve_support=true`) + Asistencias de
+    `/register-technical` (`type=Asistencia&status=Pendiente aprobación`).
+  - Asistencia: "Editar" abre `/registro-inspeccion-tecnica/:id` (materiales) y
+    "Aprobar" usa `approve-technical-inspection`. Soporte: "Editar" abre el
+    formulario de la inspección y "Aprobar" usa `approve-support`.
 
 ### Tests
 
@@ -441,7 +481,7 @@ aprobar.
 | La inspección existe | 404 |
 | `status` distinto de `Finalizado` | 400 |
 | `management_area = 'Comercial'` | 400 (`ya está en Técnica` / `Solo se pueden devolver a Técnica registros de Comercial`) |
-| Tiene registro técnico (las Asistencias aprobadas no tienen) | 400 |
+| Tiene registro técnico (las Asistencias aprobadas con el flujo anterior no tienen) | 400 |
 | Última gestión comercial existe, no está Aprobada (5) ni ya devuelta (9) | 404 / 400 |
 | No hay proyecto (`task_technical`): se armó con una proforma aprobada antes | 400 |
 | Sin entregas ni gestiones financieras (`_ensure_returnable`, compartida con la sección 5) | 400 |

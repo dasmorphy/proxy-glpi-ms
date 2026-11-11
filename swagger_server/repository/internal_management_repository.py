@@ -55,9 +55,11 @@ class InternalManagementRepository:
     INSPECTION_TYPE = "Inspección"
     SUPPORT_TYPE = "Soporte"
     ASSISTANCE_TYPE = "Asistencia"
-    # Tipos que no continúan el flujo (se quedan en Técnica, usan fecha inicio/fin)
+    # Tipos que usan fecha inicio/fin en lugar de la fecha compromiso. Solo el
+    # Soporte sale del flujo; la Asistencia sigue el flujo normal
     SUPPORT_TYPES = (SUPPORT_TYPE, ASSISTANCE_TYPE)
     VALID_TYPES = (INSPECTION_TYPE, SUPPORT_TYPE, ASSISTANCE_TYPE)
+    MANAGEMENT_STATUS_COMPLETED = "Completado"
 
     def __init__(self):
         self.db_telearseg = PostgreSQLClient("TELEARSEG")
@@ -517,8 +519,9 @@ class InternalManagementRepository:
             try:
                 validate_documents(files)
                 inspection_type = self._inspection_type(body.get("type"))
-                if inspection_type in self.SUPPORT_TYPES:
-                    # Soporte / Asistencia no continúan el flujo: se quedan en Técnica
+                if inspection_type == self.SUPPORT_TYPE:
+                    # El Soporte no continúa el flujo: se queda en Técnica.
+                    # La Asistencia sigue el flujo normal, como una Inspección
                     current_area, next_area = "Técnica", None
                 else:
                     current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
@@ -591,12 +594,11 @@ class InternalManagementRepository:
 
                 inspection = self._get_inspection(session, id_inspection)
 
-                # El formulario siempre envía type: solo se procesa si cambia,
-                # para no sacar del flujo a una Asistencia ya aprobada
+                # El formulario siempre envía type: solo se procesa si cambia
                 if "type" in body and self._inspection_type(body["type"]) != inspection.type:
                     inspection_type = self._inspection_type(body["type"])
                     if (
-                        inspection_type in self.SUPPORT_TYPES
+                        inspection_type == self.SUPPORT_TYPE
                         and self._follows_flow(inspection)
                         and self._inspection_started_flow(session, inspection)
                     ):
@@ -605,12 +607,16 @@ class InternalManagementRepository:
                             400,
                         )
                     inspection.type = inspection_type
-                    if inspection_type in self.SUPPORT_TYPES:
-                        # Un nuevo tipo de soporte requiere una nueva aprobación
+                    if inspection_type == self.SUPPORT_TYPE:
+                        # El Soporte sale del flujo y requiere su propia aprobación
                         inspection.approve_support = False
                         inspection.next_area = None
-                    elif inspection.next_area is None and inspection.management_area == "Técnica":
-                        inspection.next_area = "Comercial"
+                    elif inspection.management_area in (None, "Técnica"):
+                        # Vuelve al flujo: la Asistencia se aprueba con su registro
+                        # técnico, no con la aprobación del Soporte
+                        inspection.approve_support = False
+                        if inspection.next_area is None:
+                            inspection.next_area = "Comercial"
 
                 self._apply_fields(
                     inspection,
@@ -764,11 +770,23 @@ class InternalManagementRepository:
                 if filters.get("ticket_technical_id") is not None:
                     conditions.append(TechnicalTicketManagement.id_management_technical == filters["ticket_technical_id"])
 
+                if filters.get("type"):
+                    conditions.append(self._type_condition(filters["type"]))
+
+                if filters.get("responsible"):
+                    # Lo envía el front cuando consulta un técnico: ve los registros
+                    # de los que es responsable y, de las Asistencias, solo las que
+                    # aún no están en management_status Completado
+                    conditions.append(
+                        InspectionTechnical.responsible_id == filters["responsible"]
+                    )
+                    conditions.append(self._not_completed_assistance())
+
                 if filters.get("pending_commercial") == 'true':
                     conditions.append(
                         InspectionTechnical.status == "Listo para cotizar"
                     )
-                    conditions.append(self._not_support())
+                    conditions.append(self._in_flow())
 
                     conditions.append(
                         ~exists().where(
@@ -836,7 +854,7 @@ class InternalManagementRepository:
 
                 if ticket is None:
                     raise CustomAPIException("Inspección no encontrada", 404)
-                # Las Asistencias aprobadas sí pasan por Comercial
+                # El Soporte no pasa por Comercial
                 self._ensure_follows_flow(ticket)
                 latest = self._get_latest_management(
                     session,
@@ -1700,9 +1718,13 @@ class InternalManagementRepository:
                 self._validate_update_body(body, "id_inspection")
                 self._validate_update_body(body, "user")
                 inspection = self._get_inspection(session, body.get("id_inspection"))
+                self._ensure_not_support(inspection)
 
                 inspection.status = "Listo para cotizar"
                 inspection.updated_by = body.get("user")
+                if inspection.type == self.ASSISTANCE_TYPE:
+                    # La Asistencia se aprueba con su registro técnico
+                    inspection.approve_support = True
 
                 if inspection.management_area == "Técnica":
                     inspection.management_area = "Comercial"
@@ -1732,40 +1754,30 @@ class InternalManagementRepository:
                 session.close()
 
     def approve_support(self, body, internal, external):
-        """Marca un Soporte / Asistencia como aprobado (approve_support = true)."""
+        """Marca un Soporte como aprobado (approve_support = true); se queda en Técnica.
+        La Asistencia sigue el flujo normal y se aprueba con su registro técnico
+        (approve_technical_inspection)."""
         with self.db_telearseg.session_factory() as session:
             try:
                 self._validate_update_body(body, "id_inspection")
                 self._validate_update_body(body, "user")
                 inspection = self._get_inspection(session, body.get("id_inspection"))
 
-                if not self._is_support(inspection):
+                if inspection.type == self.ASSISTANCE_TYPE:
                     raise CustomAPIException(
-                        "Solo se pueden aprobar registros de tipo Soporte o Asistencia", 400
+                        "La asistencia se aprueba con su registro técnico", 400
+                    )
+                if inspection.type != self.SUPPORT_TYPE:
+                    raise CustomAPIException(
+                        "Solo se pueden aprobar registros de tipo Soporte", 400
                     )
                 if inspection.approve_support:
                     raise CustomAPIException(
-                        f"El {inspection.type.lower()} ya se encuentra aprobado", 400
+                        "El soporte ya se encuentra aprobado", 400
                     )
 
                 inspection.approve_support = True
-                # inspection.status = "Listo para cotizar"
                 inspection.updated_by = body.get("user")
-
-                # La Asistencia aprobada pasa a Comercial y sigue el flujo normal;
-                # el Soporte se queda en Técnica
-                if inspection.type == self.ASSISTANCE_TYPE:
-                    previous_area = inspection.management_area or "Técnica"
-                    inspection.status = "Listo para cotizar"
-                    inspection.management_area = "Comercial"
-                    inspection.next_area = "Proyectos"
-                    session.add(HistoryAreaTicket(
-                        ticket_id=inspection.id_inspection,
-                        previous_area=previous_area,
-                        current_area="Comercial",
-                        created_by=body.get("user"),
-                    ))
-
                 session.commit()
             except Exception as exception:
                 session.rollback()
@@ -2041,7 +2053,7 @@ class InternalManagementRepository:
                     .order_by(TechnicalTicketManagement.id_management_technical.desc())
                 ).scalars().first()
                 if technical is None:
-                    # Ej: Asistencias aprobadas, que pasan directo a Comercial
+                    # Ej: Asistencias aprobadas con el flujo anterior (sin registro técnico)
                     raise CustomAPIException(
                         "El registro no tiene registro técnico; no se puede devolver a Técnica",
                         400,
@@ -2289,6 +2301,10 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.status == filters["status"])
                 if filters.get("responsible"):
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible"])
+                if filters.get("responsible") or filters.get("responsible_id"):
+                    # Consulta de un técnico (igual que GET /register-technical): las
+                    # Asistencias en management_status Completado no se le muestran
+                    conditions.append(self._not_completed_assistance())
                 if filters.get("client_id") is not None:
                     conditions.append(InspectionTechnical.client_id.in_(filters["client_id"]))
                 if filters.get("ubication_id") is not None:
@@ -2307,16 +2323,20 @@ class InternalManagementRepository:
                     # Sin registro técnico asociado (LEFT JOIN sin coincidencia) o
                     # devuelto desde Comercial; las de Soporte no continúan el flujo
                     conditions.append(or_(
-                        TechnicalTicketManagement.id_management_technical.is_(None),
+                        and_(
+                            TechnicalTicketManagement.id_management_technical.is_(None),
+                            # Asistencias antiguas: ya pasaron a Comercial sin registro
+                            ~self._legacy_approved_assistance(),
+                        ),
                         TechnicalTicketManagement.status == self.TECHNICAL_STATUS_RETURNED,
                     ))
-                    conditions.append(self._not_support())
+                    conditions.append(self._in_flow())
 
                 if filters.get("pending_commercial") == 'true':
                     conditions.append(
                         InspectionTechnical.status == "Listo para cotizar"
                     )
-                    # Incluye las Asistencias aprobadas
+                    # Incluye las Asistencias; excluye el Soporte
                     conditions.append(self._in_flow())
 
                     conditions.append(
@@ -2412,12 +2432,15 @@ class InternalManagementRepository:
                 # /inspection?pending_commercial=true,
                 # /register-commercial?is_registred=true y ?pending_financial=true
                 pending_technical = count_inspections(
-                    # Las Asistencias aprobadas pasan directo a Comercial
-                    self._not_support(),
+                    # date_conditions ya excluye el Soporte (_in_flow)
                     or_(
-                        ~exists().where(
-                            TechnicalTicketManagement.inspection_id
-                            == InspectionTechnical.id_inspection
+                        and_(
+                            ~exists().where(
+                                TechnicalTicketManagement.inspection_id
+                                == InspectionTechnical.id_inspection
+                            ),
+                            # Asistencias antiguas: pasaron a Comercial sin registro
+                            ~self._legacy_approved_assistance(),
                         ),
                         # Devueltas desde Comercial
                         exists().where(
@@ -2623,7 +2646,7 @@ class InternalManagementRepository:
     @classmethod
     def _dashboard_inspection_conditions(cls, filters):
         """Rango de fechas del dashboard; solo cuentan los registros del flujo
-        (no Soporte ni Asistencias sin aprobar)."""
+        (no Soporte)."""
         conditions = [cls._in_flow()]
         if filters.get("start_date"):
             conditions.append(InspectionTechnical.created_at >= filters["start_date"])
@@ -2807,53 +2830,54 @@ class InternalManagementRepository:
         return or_(*conditions)
 
     @classmethod
-    def _not_support(cls):
-        """Excluye Soporte y Asistencia (ej: pendientes de Técnica)."""
+    def _in_flow(cls):
+        """Registros que siguen el flujo Técnica -> Comercial -> Proyectos -> Financiera:
+        todos menos el Soporte (la Asistencia sigue el flujo normal)."""
         # IS DISTINCT FROM para no descartar las inspecciones antiguas con type NULL
+        return InspectionTechnical.type.is_distinct_from(cls.SUPPORT_TYPE)
+
+    @classmethod
+    def _legacy_approved_assistance(cls):
+        """Asistencias aprobadas con /approve-support antes de que la Asistencia
+        tuviera registro técnico: pasaron directo a Comercial sin él."""
+        # Sin NULL (IS NOT DISTINCT FROM / IS TRUE) para poder negarla con ~
         return and_(
-            *(InspectionTechnical.type.is_distinct_from(t) for t in cls.SUPPORT_TYPES)
+            InspectionTechnical.type.is_not_distinct_from(cls.ASSISTANCE_TYPE),
+            InspectionTechnical.approve_support.is_(True),
         )
 
     @classmethod
-    def _in_flow(cls):
-        """Registros que siguen el flujo Comercial -> Proyectos -> Financiera:
-        los que no son Soporte / Asistencia y las Asistencias aprobadas."""
+    def _not_completed_assistance(cls):
+        """Excluye las Asistencias en management_status Completado (vista del técnico).
+        IS DISTINCT FROM para conservar los type / management_status NULL."""
         return or_(
-            cls._not_support(),
-            and_(
-                InspectionTechnical.type == cls.ASSISTANCE_TYPE,
-                InspectionTechnical.approve_support.is_(True),
+            InspectionTechnical.type.is_distinct_from(cls.ASSISTANCE_TYPE),
+            InspectionTechnical.management_status.is_distinct_from(
+                cls.MANAGEMENT_STATUS_COMPLETED
             ),
         )
 
     @classmethod
     def _is_support(cls, inspection):
+        """Soporte o Asistencia (usan fecha inicio y fin)."""
         return inspection.type in cls.SUPPORT_TYPES
 
     @classmethod
     def _follows_flow(cls, inspection):
         """Versión en Python de _in_flow para una inspección ya cargada."""
-        if not cls._is_support(inspection):
-            return True
-        return inspection.type == cls.ASSISTANCE_TYPE and bool(inspection.approve_support)
+        return inspection.type != cls.SUPPORT_TYPE
 
     @classmethod
     def _ensure_not_support(cls, inspection):
-        """Soporte y Asistencia no tienen registro técnico."""
-        if cls._is_support(inspection):
+        """El Soporte no tiene registro técnico ni continúa el flujo."""
+        if not cls._follows_flow(inspection):
             raise CustomAPIException(
                 "Las inspecciones de soporte no continúan el flujo", 400
             )
 
     @classmethod
     def _ensure_follows_flow(cls, inspection):
-        if not cls._follows_flow(inspection):
-            message = (
-                "La asistencia debe estar aprobada para continuar el flujo"
-                if inspection.type == cls.ASSISTANCE_TYPE
-                else "Las inspecciones de soporte no continúan el flujo"
-            )
-            raise CustomAPIException(message, 400)
+        cls._ensure_not_support(inspection)
 
     @staticmethod
     def _inspection_started_flow(session, inspection):

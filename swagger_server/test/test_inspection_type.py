@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 from types import SimpleNamespace
 import unittest
 
@@ -13,6 +14,8 @@ from swagger_server.models.db.financial_ticket_management import FinancialTicket
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
 from swagger_server.models.db.inspection_documents import InspectionDocuments
 from swagger_server.models.db.inspection_technical import InspectionTechnical
+from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
+from swagger_server.models.db.pending_material import PendingMaterial
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 from swagger_server.repository.internal_management_repository import (
@@ -25,6 +28,8 @@ TABLES = [
     InspectionDocuments.__table__,
     HistoryAreaTicket.__table__,
     TechnicalTicketManagement.__table__,
+    MaterialTechTicket.__table__,
+    PendingMaterial.__table__,
     CommercialTicketManagement.__table__,
     FinancialTicketManagement.__table__,
     TaskTechnical.__table__,
@@ -265,6 +270,20 @@ class TestInspectionTypeFilters(unittest.TestCase):
 
         self.assertIn("inspection_technical.type IS DISTINCT FROM", sql)
 
+    def test_technician_does_not_see_completed_assistances(self):
+        # El técnico consulta /inspection?pending_technical=true&responsible_id=...
+        sql = inspection_sql({
+            "pending_technical": "true",
+            "responsible_id": "4cc33865-1bad-4af4-9f18-3ce5dfb744b5",
+        })
+
+        self.assertIn("inspection_technical.management_status IS DISTINCT FROM", sql)
+
+    def test_without_responsible_completed_assistances_are_listed(self):
+        sql = inspection_sql({"pending_technical": "true"})
+
+        self.assertNotIn("management_status", sql.split("WHERE", 1)[1])
+
     def test_without_pending_filters_support_is_listed(self):
         sql = inspection_sql({})
 
@@ -284,19 +303,129 @@ class TestInspectionTypeFilters(unittest.TestCase):
 
 
 class TestAssistanceType(unittest.TestCase):
+    """La Asistencia sigue el flujo normal (registro técnico con materiales);
+    solo se diferencia de la Inspección por usar fecha inicio y fin."""
+
     def setUp(self):
         self.repository = sqlite_repository()
 
-    def test_assistance_behaves_like_support(self):
+    def test_assistance_follows_flow_like_inspection(self):
         inspection = create(self.repository, type="Asistencia", status="Listo para cotizar")
 
         self.assertEqual("Asistencia", inspection.type)
+        self.assertEqual("Comercial", inspection.management_area)
+        self.assertEqual("Proyectos", inspection.next_area)
+
+    def test_new_assistance_starts_in_technical(self):
+        inspection = create(self.repository, type="Asistencia")
+
         self.assertEqual("Técnica", inspection.management_area)
-        self.assertIsNone(inspection.next_area)
+        self.assertEqual("Comercial", inspection.next_area)
 
     def test_assistance_requires_dates(self):
         with self.assertRaises(CustomAPIException):
             create(self.repository, type="Asistencia", end_date=None)
+
+    def test_assistance_accepts_technical_register_with_materials(self):
+        inspection = create(self.repository, type="Asistencia")
+
+        self.repository.post_ticket_technical(
+            {
+                "inspection_id": inspection.id_inspection,
+                "user": "tecnico",
+                "materials": [{"material_id": 7, "quantity": 2}],
+            },
+            "i", "e", files=[],
+        )
+
+        with self.repository.db_telearseg.session_factory() as session:
+            register = session.execute(
+                select(TechnicalTicketManagement).where(
+                    TechnicalTicketManagement.inspection_id == inspection.id_inspection
+                )
+            ).scalar_one()
+            materials = session.execute(
+                select(MaterialTechTicket).where(
+                    MaterialTechTicket.tech_ticket == register.id_management_technical
+                )
+            ).scalars().all()
+            self.assertEqual("Pendiente aprobación", register.status)
+            self.assertEqual([7], [material.material_id for material in materials])
+
+    def test_approve_technical_register_moves_assistance_to_commercial(self):
+        inspection = create(self.repository, type="Asistencia")
+        self.repository.post_ticket_technical(
+            {"inspection_id": inspection.id_inspection, "user": "tecnico"},
+            "i", "e", files=[],
+        )
+
+        self.repository.approve_technical_inspection(
+            {"id_inspection": inspection.id_inspection, "user": "jefe"}, "i", "e"
+        )
+
+        with self.repository.db_telearseg.session_factory() as session:
+            approved = session.get(InspectionTechnical, inspection.id_inspection)
+            register = session.execute(
+                select(TechnicalTicketManagement).where(
+                    TechnicalTicketManagement.inspection_id == inspection.id_inspection
+                )
+            ).scalar_one()
+            self.assertTrue(approved.approve_support)
+            self.assertEqual("Listo para cotizar", approved.status)
+            self.assertEqual("Comercial", approved.management_area)
+            self.assertEqual("Proyectos", approved.next_area)
+            self.assertEqual("Aprobado", register.status)
+
+        # Ya puede registrarse la gestión comercial
+        self.repository.post_ticket_commercial(
+            {"inspection_id": inspection.id_inspection, "user": "dmales"},
+            "i", "e", files=[],
+        )
+
+    def test_dashboard_counts_assistance_as_pending_technical(self):
+        create(self.repository, type="Asistencia")
+        create(self.repository, type="Soporte")
+
+        counts = self.repository.get_dashboard_counts({}, "i", "e")
+
+        self.assertEqual(1, counts["pending_technical"])
+
+    def test_legacy_approved_assistance_is_not_pending_technical(self):
+        # Aprobada con el flujo anterior: pasó a Comercial sin registro técnico
+        legacy = create(self.repository, type="Asistencia")
+        with self.repository.db_telearseg.session_factory() as session:
+            stored = session.get(InspectionTechnical, legacy.id_inspection)
+            stored.approve_support = True
+            stored.status = "Listo para cotizar"
+            stored.management_area = "Comercial"
+            session.commit()
+
+        counts = self.repository.get_dashboard_counts({}, "i", "e")
+
+        self.assertEqual(0, counts["pending_technical"])
+        self.assertEqual(1, counts["pending_commercial"])
+
+    def test_support_changed_to_assistance_needs_technical_approval(self):
+        inspection = create(self.repository, type="Soporte")
+        self.repository.approve_support(
+            {"id_inspection": inspection.id_inspection, "user": "jefe"}, "i", "e"
+        )
+
+        self.repository.update_inspection_technical(
+            inspection.id_inspection, {"type": "Asistencia", "user": "dmales"}, "i", "e"
+        )
+
+        with self.repository.db_telearseg.session_factory() as session:
+            updated = session.get(InspectionTechnical, inspection.id_inspection)
+            self.assertFalse(updated.approve_support)
+            self.assertEqual("Comercial", updated.next_area)
+
+    def test_pending_technical_includes_assistance(self):
+        sql = inspection_sql({"pending_technical": "true"})
+
+        # Solo excluye el Soporte y las Asistencias antiguas ya aprobadas
+        self.assertEqual(1, sql.count("inspection_technical.type IS DISTINCT FROM"))
+        self.assertIn("inspection_technical.approve_support IS", sql)
 
 
 class TestApproveSupport(unittest.TestCase):
@@ -311,7 +440,7 @@ class TestApproveSupport(unittest.TestCase):
             return session.get(InspectionTechnical, inspection.id_inspection)
 
     def test_approve_support_sets_flag(self):
-        inspection = create(self.repository, type="Asistencia")
+        inspection = create(self.repository, type="Soporte")
 
         approved = self.approve(inspection)
 
@@ -326,29 +455,20 @@ class TestApproveSupport(unittest.TestCase):
 
         self.assertEqual(400, context.exception.status_code)
 
+    def test_assistance_cannot_be_approved_as_support(self):
+        inspection = create(self.repository, type="Asistencia")
+
+        with self.assertRaises(CustomAPIException) as context:
+            self.approve(inspection)
+
+        self.assertEqual(400, context.exception.status_code)
+
     def test_already_approved_support_is_rejected(self):
         inspection = create(self.repository, type="Soporte")
         self.approve(inspection)
 
         with self.assertRaises(CustomAPIException):
             self.approve(inspection)
-
-    def test_approved_assistance_moves_to_commercial(self):
-        inspection = create(self.repository, type="Asistencia")
-
-        approved = self.approve(inspection)
-
-        self.assertEqual("Listo para cotizar", approved.status)
-        self.assertEqual("Comercial", approved.management_area)
-        self.assertEqual("Proyectos", approved.next_area)
-        with self.repository.db_telearseg.session_factory() as session:
-            history = session.execute(
-                select(HistoryAreaTicket).where(
-                    HistoryAreaTicket.ticket_id == inspection.id_inspection,
-                    HistoryAreaTicket.current_area == "Comercial",
-                )
-            ).scalars().all()
-        self.assertEqual(1, len(history))
 
     def test_approved_support_stays_in_technical(self):
         inspection = create(self.repository, type="Soporte")
@@ -358,69 +478,79 @@ class TestApproveSupport(unittest.TestCase):
         self.assertEqual("Técnica", approved.management_area)
         self.assertIsNone(approved.next_area)
 
-    def test_commercial_register_requires_approved_assistance(self):
-        inspection = create(self.repository, type="Asistencia")
-        body = {"inspection_id": inspection.id_inspection, "user": "dmales"}
+    def test_approved_support_still_rejects_commercial_register(self):
+        inspection = create(self.repository, type="Soporte")
+        self.approve(inspection)
 
         with self.assertRaises(CustomAPIException) as context:
-            self.repository.post_ticket_commercial(body, "i", "e", files=[])
-        self.assertEqual(400, context.exception.status_code)
-
-        self.approve(inspection)
-        self.repository.post_ticket_commercial(body, "i", "e", files=[])
-
-        with self.repository.db_telearseg.session_factory() as session:
-            registered = session.execute(
-                select(CommercialTicketManagement).where(
-                    CommercialTicketManagement.ticket_id == inspection.id_inspection
-                )
-            ).scalars().all()
-        self.assertEqual(1, len(registered))
-
-    def test_technical_register_still_rejected_for_approved_assistance(self):
-        inspection = create(self.repository, type="Asistencia")
-        self.approve(inspection)
-
-        with self.assertRaises(CustomAPIException):
-            self.repository.post_ticket_technical(
+            self.repository.post_ticket_commercial(
                 {"inspection_id": inspection.id_inspection, "user": "dmales"},
                 "i", "e", files=[],
             )
+        self.assertEqual(400, context.exception.status_code)
 
-    def test_editing_approved_assistance_keeps_it_in_flow(self):
-        inspection = create(self.repository, type="Asistencia")
-        self.approve(inspection)
+    def test_support_cannot_be_approved_as_technical_register(self):
+        inspection = create(self.repository, type="Soporte")
 
-        # El formulario de edición siempre reenvía el type
-        self.repository.update_inspection_technical(
-            inspection.id_inspection, {"type": "Asistencia", "user": "dmales"}, "i", "e"
-        )
-
-        with self.repository.db_telearseg.session_factory() as session:
-            updated = session.get(InspectionTechnical, inspection.id_inspection)
-            self.assertTrue(updated.approve_support)
-            self.assertEqual("Proyectos", updated.next_area)
-
-    def test_dashboard_counts_approved_assistance_only_as_commercial(self):
-        pending = create(self.repository, type="Asistencia")
-        approved = create(self.repository, type="Asistencia")
-        self.approve(approved)
-
-        counts = self.repository.get_dashboard_counts({}, "i", "e")
-
-        self.assertEqual(0, counts["pending_technical"])
-        self.assertEqual(1, counts["pending_commercial"])
-        self.assertIsNotNone(pending)
-
-    def test_pending_commercial_includes_approved_assistance(self):
-        sql = inspection_sql({"pending_commercial": "true"})
-
-        self.assertIn("inspection_technical.approve_support IS", sql)
+        with self.assertRaises(CustomAPIException):
+            self.repository.approve_technical_inspection(
+                {"id_inspection": inspection.id_inspection, "user": "jefe"}, "i", "e"
+            )
 
     def test_pending_approve_support_filter(self):
         sql = inspection_sql({"pending_approve_support": "true"})
 
         self.assertIn("inspection_technical.approve_support IS NOT", sql)
+
+
+class TestTechnicalRegisterResponsibleFilter(unittest.TestCase):
+    """GET /register-technical con responsible (rol técnico): las Asistencias solo
+    salen si management_status no es Completado."""
+
+    RESPONSIBLE = "fcea920f-7412-b5da-7be0-cf42b8c93759"
+    OTHER = "05a0caad-4eb7-4a5a-bcd9-89d497564345"
+
+    def setUp(self):
+        self.repository = sqlite_repository()
+        self.ids = {}
+        for key, inspection_type, status, responsible in (
+            ("inspection_completed", "Inspección", "Completado", self.RESPONSIBLE),
+            ("assistance_completed", "Asistencia", "Completado", self.RESPONSIBLE),
+            ("assistance_in_progress", "Asistencia", "En proceso", self.RESPONSIBLE),
+            ("assistance_without_status", "Asistencia", None, self.RESPONSIBLE),
+            ("other_responsible", "Asistencia", "En proceso", self.OTHER),
+        ):
+            inspection = create(
+                self.repository,
+                type=inspection_type,
+                management_status=status,
+                responsible_id=uuid.UUID(responsible),
+            )
+            self.repository.post_ticket_technical(
+                {"inspection_id": inspection.id_inspection, "user": "tecnico"},
+                "i", "e", files=[],
+            )
+            self.ids[inspection.id_inspection] = key
+
+    def keys(self, filters):
+        rows = self.repository.get_ticket_technical(filters, "i", "e")
+        return {self.ids[ticket.id_inspection] for _, ticket, _ in rows}
+
+    def test_responsible_hides_completed_assistances(self):
+        self.assertEqual(
+            {"inspection_completed", "assistance_in_progress", "assistance_without_status"},
+            self.keys({"responsible": uuid.UUID(self.RESPONSIBLE)}),
+        )
+
+    def test_without_responsible_lists_everything(self):
+        self.assertEqual(set(self.ids.values()), self.keys({}))
+
+    def test_type_filter(self):
+        self.assertEqual({"inspection_completed"}, self.keys({"type": ["Inspección"]}))
+        self.assertEqual(
+            {"assistance_in_progress", "assistance_without_status"},
+            self.keys({"responsible": uuid.UUID(self.RESPONSIBLE), "type": ["Asistencia"]}),
+        )
 
 
 if __name__ == "__main__":

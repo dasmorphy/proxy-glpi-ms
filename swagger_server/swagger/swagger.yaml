@@ -999,9 +999,25 @@ paths:
         - name: responsible
           in: query
           required: false
+          description: >-
+            responsible_id de la inspección; lo envía el front para el rol técnico.
+            Con este filtro las Asistencias solo salen si management_status no es Completado.
           schema:
             type: string
-            example: dmales
+            example: fcea920f-7412-b5da-7be0-cf42b8c93759
+        - name: type
+          in: query
+          required: false
+          description: >-
+            Filtra por uno o varios tipos (type=Inspección&type=Asistencia).
+            Inspección incluye las antiguas sin tipo.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [Inspección, Soporte, Asistencia]
         - name: client_id
           in: query
           required: false
@@ -1877,8 +1893,10 @@ paths:
     post:
       tags:
       - Inspection
-      summary: Aprueba un Soporte / Asistencia.
-      description: Actualiza approve_support a true. Solo aplica a registros de tipo Soporte o Asistencia.
+      summary: Aprueba un Soporte.
+      description: >-
+        Actualiza approve_support a true. Solo aplica a registros de tipo Soporte.
+        La Asistencia sigue el flujo normal y se aprueba con approve-technical-inspection.
       operationId: approve_support
       requestBody:
         required: true

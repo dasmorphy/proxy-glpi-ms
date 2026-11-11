@@ -259,7 +259,7 @@ class InternalManagementUseCase:
             "start_date": ticket.start_date,
             "end_date": ticket.end_date,
             "code": ticket.code,
-            # "management_status": ticket.management_status,
+            "management_status": ticket.management_status,
             "case_type": ticket.case_type,
             "client_id": ticket.client_id,
             "ubication_id": ticket.ubication_id,
