@@ -210,6 +210,17 @@ los pendientes del técnico pueden no tener una. Devuelve `origin` (`Técnico` o
   materiales varios). Así, si se quitó el ítem o se edita una proforma guardada,
   se puede volver a vincular al pendiente del técnico en lugar de crear un
   "Producto nuevo" suelto que al aprobar generaría otro pendiente.
+- `register-ticket-commercial`, al editar una proforma guardada
+  (`mergeTechnicalMaterials`): agrega como líneas los materiales del técnico
+  creados **después del último guardado de la proforma**
+  (`created_at` de `/inspection-materials` > `sale_quotation.updated_at` de
+  `GET /register-commercial`) que no están en ella. Los del catálogo se agregan
+  con sus precios y los nuevos con `material_tech_ticket_id` y sin precio. Se
+  identifican por `material_tech_ticket_id` (nuevos) o `material_id` (catálogo,
+  como ítem o en materiales varios). Los anteriores al guardado no se agregan,
+  porque Comercial pudo excluirlos a propósito. Además, avisa sin tocar la
+  proforma cuando el técnico quitó un producto nuevo o cuando la cantidad
+  difiere (catálogo: solo si hay una única línea de ese producto).
 - `components/modals/pending-product-dialog`: diálogo reutilizable para crear el
   producto o, con "Usar producto existente", vincularlo a uno del catálogo
   (`tech-materials` del servicio técnico). Las opciones del catálogo se ordenan
@@ -583,9 +594,11 @@ Como la gestión no está aprobada, no hay proyecto, entregas ni facturas. Los
 pendientes siguen las reglas de la sección 1:
 
 - Producto del catálogo agregado o editado: la proforma no cambia hasta que
-  Comercial la edite.
-- Producto nuevo agregado: crea un pendiente `Pendiente` sin proforma. Si Comercial
-  no lo incluye al editar, pasa a `Eliminado de proforma`.
+  Comercial la edite. Al editarla, el front agrega los materiales nuevos del
+  técnico y avisa las cantidades distintas (sección 1, Front).
+- Producto nuevo agregado: crea un pendiente `Pendiente` sin proforma. Al editar,
+  el front lo agrega a la proforma; si Comercial lo quita antes de guardar, pasa a
+  `Eliminado de proforma`.
 - Producto nuevo editado: el pendiente (sin `quote_id` y no `Creado`) toma los
   cambios. La línea de la proforma conserva los datos anteriores hasta que se edite.
 - Producto nuevo quitado, o cambiado por uno del catálogo: la línea de la proforma

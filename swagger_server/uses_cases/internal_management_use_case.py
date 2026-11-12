@@ -448,6 +448,8 @@ class InternalManagementUseCase:
         return {
             "id_quote": quotation.id_quote,
             "client_company": quotation.client_company,
+            # Último guardado: el front lo compara con created_at de los materiales del técnico
+            "updated_at": quotation.updated_at,
             "items": [
                 {
                     "id_item": item.id_item,
@@ -608,6 +610,8 @@ class InternalManagementUseCase:
                 "material_description": material.material_description,
                 "other": material.other,
                 "quantity": material.quantity,
+                # El front agrega a la proforma los creados después de su último guardado
+                "created_at": material.created_at,
                 "equipment": {
                     "id_equipment": equipment.id_equipment,
                     "code": equipment.code,

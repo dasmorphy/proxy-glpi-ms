@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 import unittest
@@ -262,6 +263,31 @@ class TestSerializeSaleQuotation(unittest.TestCase):
 
     def test_without_quotation_returns_none(self):
         self.assertIsNone(self.use_case._serialize_sale_quotation(None))
+
+    def test_includes_last_save_date(self):
+        saved_at = datetime(2026, 11, 12, 10, 30)
+        quotation = SaleQuotation(id_quote=30, updated_at=saved_at)
+
+        result = self.use_case._serialize_sale_quotation((quotation, [], []))
+
+        self.assertEqual(saved_at, result["updated_at"])
+
+
+class TestInspectionMaterialsCreatedAt(unittest.TestCase):
+    def test_includes_creation_date_of_technical_materials(self):
+        created_at = datetime(2026, 11, 12, 11, 0)
+        material = SimpleNamespace(
+            id_material=5, tech_ticket=4, material_id=None, material_description="Sensor",
+            other="Nuevo", quantity=2, created_at=created_at,
+        )
+        repository = SimpleNamespace(get_inspection_materials=lambda *args: [(material, None)])
+
+        result = InternalManagementUseCase(repository).get_inspection_materials(
+            {"inspection_id": "45"}, "i", "e"
+        )
+
+        self.assertEqual(created_at, result[0]["created_at"])
+        self.assertIsNone(result[0]["equipment"])
 
 
 if __name__ == "__main__":
