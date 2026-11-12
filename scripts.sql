@@ -1189,3 +1189,11 @@ ON CONFLICT (id_status) DO NOTHING;
 -- Motivo de las devoluciones (a Comercial / a Técnica) en el historial de áreas
 ALTER TABLE internal_management.history_area_ticket
     ADD COLUMN IF NOT EXISTS reason text;
+
+
+-- ASISTENCIAS: VAN DIRECTO DE COMERCIAL A FINANCIERA (ver docs/logica-negocio.md, sección 3)
+-- Al aprobar la proforma (estado 5) se registra una entrega automática que descuenta el stock.
+-- La Asistencia no tiene proyecto ni técnico receptor: task_id y delivered_to quedan en NULL.
+ALTER TABLE internal_management.material_delivery_history
+    ALTER COLUMN task_id DROP NOT NULL,
+    ALTER COLUMN delivered_to DROP NOT NULL;

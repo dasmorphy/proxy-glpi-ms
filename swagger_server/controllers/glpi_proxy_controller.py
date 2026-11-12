@@ -586,6 +586,39 @@ class GlpiProxyView(MethodView):
         except Exception as ex:
             return CustomAPIException.check_exception(ex, function_name, internal_process)
 
+    def download_sale_quotation_excel(self, id_quote, **kwargs):
+        """Genera el Excel de la proforma con el detalle de costos y ganancias."""
+        internal_process = (None, None)
+        function_name = "download_sale_quotation_excel"
+        try:
+            start_time = default_timer()
+            internal_transaction_id = str(generate_internal_transaction_id())
+            external_transaction_id = request.headers.get('externalTransactionId')
+            internal_process = (internal_transaction_id, external_transaction_id)
+            logger.info(
+                f"start request: {function_name}, channel: {request.headers.get('channel')}",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            content, name = self.internal_management_use_case.generate_sale_quotation_excel(
+                id_quote,
+                internal_transaction_id,
+                external_transaction_id,
+            )
+            logger.info(
+                f"Fin de la transacción, procesada en : {default_timer() - start_time} milisegundos",
+                internal=internal_transaction_id,
+                external=external_transaction_id,
+            )
+            return send_file(
+                BytesIO(content),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=name,
+            )
+        except Exception as ex:
+            return CustomAPIException.check_exception(ex, function_name, internal_process)
+
     def assign_sales_user(self, body=None):
         internal_process = (None, None)
         function_name = "assign_sales_user"

@@ -16,6 +16,7 @@ cambian). Salvo que se indique otra cosa, están en
 4. [Registro de proveedores](#4-registro-de-proveedores)
 5. [Devolver un registro a Comercial](#5-devolver-un-registro-a-comercial)
 6. [Devolver un registro a Técnica](#6-devolver-un-registro-a-técnica)
+7. [Documentos de la proforma (PDF / Excel)](#7-documentos-de-la-proforma-pdf--excel)
 
 ---
 
@@ -149,6 +150,10 @@ En `post_material_delivery`, si el ítem o el componente de la proforma no tiene
   Si ya se creó (por ejemplo, desde el técnico antes de la proforma), se
   descuenta del producto creado.
 - Siempre se valida que no se entregue más de lo aprobado en la proforma.
+- La **Asistencia** no pasa por esta entrega: al aprobarse la proforma se
+  registra una entrega automática con el mismo modelo (`task_id` y
+  `delivered_to` en `NULL`). Sus productos nuevos quedan igual, con su
+  pendiente y sin descontar stock (sección 3).
 
 ### 1.5 Resolución (alta en el catálogo)
 
@@ -297,9 +302,12 @@ también al editar.
 `inspection_technical.type` distingue:
 
 - **Inspección**: flujo completo Técnica → Comercial → Proyectos → Financiera.
-- **Asistencia**: **mismo flujo que la Inspección** (registro técnico con
-  materiales, aprobación técnica, Comercial…). Solo cambia que usa fecha inicio
-  y fin, y que en el front se aprueba desde la bandeja "Soportes / Asistencias".
+- **Asistencia**: Técnica → Comercial → **Financiera** (sin Proyectos). En
+  Técnica y Comercial sigue el flujo de la Inspección (registro técnico con
+  materiales, aprobación técnica, proforma). Usa fecha inicio y fin, en el front
+  se aprueba desde la bandeja "Soportes / Asistencias", y al aprobarse su
+  gestión comercial pasa directo a Financiera descontando el stock (ver
+  "Aprobación comercial de la Asistencia").
 - **Soporte**: solo se registra en `inspection_technical` y no continúa a las
   siguientes áreas.
 
@@ -363,6 +371,53 @@ también al editar.
   `GET /inspection?pending_commercial=true` (en el flujo, `status = 'Listo para
   cotizar'` y sin registro comercial). Las que siguen en Técnica no cuentan.
 
+### Aprobación comercial de la Asistencia
+
+Cuando la gestión comercial de una Asistencia pasa a Aprobada (`status_id = 5`):
+en `post_ticket_commercial`, o en `update_ticket_commercial` estando en Comercial.
+Todo va en la misma transacción que la aprobación:
+
+1. `_move_on_commercial_approval`: `management_area = next_area = 'Financiera'` e
+   historial `Comercial → Financiera` (una Inspección va a Proyectos, como siempre).
+   Así sale en `GET /register-commercial?pending_financial=true` y en el contador
+   `pending_financial` del dashboard sin cambiar esas consultas.
+2. `_generate_pending_materials` (sección 1.3).
+3. `_discount_assistance_materials`: entrega automática en
+   `material_delivery_history` con `task_id = NULL`, `delivered_to = NULL`,
+   `created_by` = usuario que guarda la proforma y `observation = 'Descuento
+   automático por asistencia'`. Un detalle por línea con la **cantidad de la
+   proforma aprobada**:
+   - Entran los ítems de material y los componentes de materiales varios; no la
+     mano de obra (`is_labor`) ni la línea agrupadora (`is_bundle`).
+   - Producto del catálogo: se descuenta su stock (`SELECT … FOR UPDATE` de todos
+     los productos en una consulta). Si un producto se repite en varias líneas se
+     valida la suma. Si no alcanza: 400 `Stock insuficiente de "<producto>":
+     disponible X, requerido Y` y no se guarda nada (ni la aprobación).
+   - Producto nuevo: el detalle va con su pendiente y no descuenta. Al crearlo,
+     `resolve_pending_material` resta lo entregado, así que su stock inicial ya
+     descuenta lo usado en la Asistencia (sección 1.5).
+   - Proforma sin materiales: no se crea entrega.
+
+Antes de aprobar nunca se descuenta (guardar la proforma en Pendiente no toca el
+stock). Después de aprobada:
+
+- `_assistance_sent_to_financial` (Asistencia con historial `Comercial →
+  Financiera`): `POST /register-commercial`, y `PUT` con `sale_quotation` o con
+  un `status_id` distinto de 5, responden 400. El `PUT` de otros campos
+  (observaciones, etc.) sí se permite.
+- No se puede devolver a Comercial desde Financiera (sección 5).
+- `approve-ticket-commercial` (Proyectos → Financiera) responde 400.
+- `ready_for_project` es `false` (flag de `GET /inspection` y filtro
+  `ready_for_project=true`): no se crea proyecto.
+- Estas entregas no salen en las consultas de entregas por proyecto (logística
+  no las ve). `finished_projects` del dashboard no las cuenta (exige
+  `Proyectos → Financiera`) y en tiempos por área no hay tramo de Proyectos.
+
+**Asistencias antiguas** aprobadas antes de este cambio (en Proyectos): siguen el
+flujo anterior (proyecto, entregas, `approve-ticket-commercial`) y no descuentan
+stock al aprobarse. La migración de `scripts.sql` deja `task_id` y `delivered_to`
+de `material_delivery_history` como nullable.
+
 ### Front (pw-tickets)
 
 - `inspection-form`: dropdown "Tipo" (`Inspección` por defecto). Al editar se carga
@@ -383,7 +438,8 @@ también al editar.
 
 ### Tests
 
-`swagger_server/test/test_inspection_type.py`.
+`swagger_server/test/test_inspection_type.py` y
+`swagger_server/test/test_assistance_financial.py` (aprobación comercial).
 
 ---
 
@@ -433,6 +489,7 @@ se hacía con cambios manuales en la base.
 | La inspección existe | 404 `Inspección no encontrada` |
 | `management_area` en `Proyectos` o `Financiera` | 400 (`ya está en Comercial` / `Solo se pueden devolver registros de Proyectos o Financiera`) |
 | `status` de la inspección distinto de `Finalizado` | 400 |
+| No es una Asistencia en Financiera | 400 `Las asistencias no se pueden devolver a Comercial` (ya descontaron stock; sección 3) |
 | Última gestión comercial existe y está aprobada (5) | 404 / 400 |
 | Ninguna proforma de la inspección tiene entregas (`material_delivery_history`) | 400: el detalle de la entrega referencia las líneas, que no se podrían recrear al editar |
 | No hay gestiones financieras (`Cobrada` tiene su propio mensaje) | 400: hay que eliminarlas antes |
@@ -541,3 +598,40 @@ pendientes siguen las reglas de la sección 1:
 ### Tests
 
 `swagger_server/test/test_return_to_technical.py`.
+
+## 7. Documentos de la proforma (PDF / Excel)
+
+### Propósito
+
+Descargar la proforma (`internal_management.sale_quotation`) para el cliente (PDF)
+o para uso interno con el detalle de costos (Excel).
+
+### Endpoints
+
+- `GET /sale-quotation/{id_quote}/pdf` (`inline=true` para verla en el navegador):
+  cotización para el cliente, sin costos ni ganancias.
+- `GET /sale-quotation/{id_quote}/excel`: `.xlsx` con cliente, RUC, proyecto,
+  solicitante, asesor y fecha; por ítem: modelo, descripción, tipo, cantidad, costo,
+  ganancia %, ganancia $, PVP y total; luego subtotal, IVA, total y condiciones.
+
+### Reglas
+
+Ambos salen de `InternalManagementUseCase._build_sale_quotation_document`:
+
+- Ítem del catálogo: modelo y descripción se toman de `technical_equipment`.
+- Materiales varios: modelo `M/V` por defecto y descripción armada con sus
+  componentes (`sale_additional_materials`).
+- Mano de obra: modelo `M/V` por defecto.
+- PVP = `total / quantity`. Ganancia % = `profit_margin`; en materiales varios es
+  `profit_margin_dollar / base_price` (ponderado de sus componentes).
+- 404 si la proforma no existe.
+
+### Front (pw-tickets)
+
+`ticket-detail-sidebar`: botones ver/descargar PDF y descargar Excel
+(`GlpiService.downloadSaleQuote` / `downloadSaleQuoteExcel`).
+
+### Tests
+
+`swagger_server/test/test_sale_quotation_pdf.py`,
+`swagger_server/test/test_sale_quotation_excel.py`.

@@ -4,12 +4,15 @@ from swagger_server.models.db import Base
 
 
 class MaterialDeliveryHistory(Base):
-    """Cabecera de una entrega de materiales de bodega a un técnico del proyecto."""
+    """Cabecera de una entrega de materiales de bodega a un técnico del proyecto.
+    La entrega automática de una Asistencia aprobada no tiene proyecto ni
+    técnico receptor (task_id y delivered_to en NULL)."""
 
     __tablename__ = "material_delivery_history"
     __table_args__ = {"schema": "internal_management"}
 
     STATUS_REGISTERED = "Registrada"
+    ASSISTANCE_OBSERVATION = "Descuento automático por asistencia"
 
     id_history = Column(
         Integer,
@@ -21,7 +24,7 @@ class MaterialDeliveryHistory(Base):
     task_id = Column(
         Integer,
         ForeignKey("technical.task_technical.id_task"),
-        nullable=False,
+        nullable=True,
     )
 
     quote_id = Column(
@@ -30,7 +33,7 @@ class MaterialDeliveryHistory(Base):
         nullable=False,
     )
 
-    delivered_to = Column(Text, nullable=False)
+    delivered_to = Column(Text, nullable=True)
     observation = Column(Text)
     status = Column(Text, nullable=False, default=STATUS_REGISTERED)
     created_at = Column(DateTime, server_default=func.now())

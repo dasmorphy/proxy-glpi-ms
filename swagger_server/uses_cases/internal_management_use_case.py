@@ -8,6 +8,7 @@ from swagger_server.utils.inspection_documents import (
     document_name,
     resolve_document_path,
 )
+from swagger_server.utils.proforma_excel import generate_proforma_excel
 from swagger_server.utils.proforma_pdf import format_quantity, generate_proforma_pdf
 
 @dataclass
@@ -131,7 +132,15 @@ class InternalManagementUseCase:
                 # Total de la proforma: valor facturado de la gestión financiera
                 "sale_quote_total": sale_quote_total,
                 # Comercial aprobado (status_id 5) y sin proyecto: se puede crear el proyecto
-                "ready_for_project": commercial_status_id == 5 and project_id is None,
+                # La Asistencia va directo a Financiera: solo las antiguas en Proyectos
+                "ready_for_project": (
+                    commercial_status_id == 5
+                    and project_id is None
+                    and (
+                        inspection.type != "Asistencia"
+                        or inspection.management_area == "Proyectos"
+                    )
+                ),
                 "documents": [
                     {
                         "id_document": document.id_document,
@@ -475,8 +484,8 @@ class InternalManagementUseCase:
             "validity_days": quotation.validity_days,
         }
 
-    def generate_sale_quotation_pdf(self, id_quote, internal, external):
-        """Retorna el PDF de la proforma en bytes y el nombre del archivo."""
+    def _build_sale_quotation_document(self, id_quote, internal, external):
+        """Datos de la proforma para el PDF y el Excel: (quotation, data)."""
         quotation, inspection, company, seller, items, components, equipment = (
             self.internal_management_repository.get_sale_quotation_document(
                 id_quote, internal, external
@@ -491,7 +500,15 @@ class InternalManagementUseCase:
             record = equipment.get(material_id)
             return record.product if record else None
 
-        pdf_items = []
+        def margin_rate(item):
+            # En los bundles el % es el ponderado de sus componentes
+            base = getattr(item, "base_price", None)
+            margin = getattr(item, "profit_margin_dollar", None)
+            if item.is_bundle and base and margin is not None:
+                return margin / base
+            return getattr(item, "profit_margin", None)
+
+        document_items = []
         for item in items:
             label = None
             model = item.model
@@ -511,18 +528,21 @@ class InternalManagementUseCase:
                 description = equipment[item.material_id].product
 
             quantity = item.quantity or 0
-            pdf_items.append({
+            document_items.append({
                 "item_number": item.item_number,
                 "model": model,
                 "label": label,
                 "description": description,
                 "quantity": item.quantity,
+                "base_price": getattr(item, "base_price", None),
+                "profit_margin": margin_rate(item),
+                "profit_margin_dollar": getattr(item, "profit_margin_dollar", None),
                 "price": (item.total or 0) / quantity if quantity else item.total,
                 "total": item.total,
             })
 
         seller_attributes = (seller.attributes if seller else None) or {}
-        content = generate_proforma_pdf({
+        return quotation, {
             "quote_number": quotation.quote_number,
             "date": quotation.created_at,
             "ruc": company.identity if company else None,
@@ -530,15 +550,27 @@ class InternalManagementUseCase:
             "requested_by": inspection.contact if inspection else None,
             "project": inspection.title_ticket if inspection else None,
             "seller_name": seller_attributes.get("fullname") or quotation.created_by or "",
-            "items": pdf_items,
+            "items": document_items,
             "subtotal": quotation.subtotal,
+            "iva_rate": getattr(quotation, "iva_rate", None),
             "iva": quotation.iva,
             "total": quotation.total,
             "delivery_time": quotation.delivery_time,
             "payment_terms": quotation.payment_terms,
             "validity_days": quotation.validity_days,
-        })
+        }
+
+    def generate_sale_quotation_pdf(self, id_quote, internal, external):
+        """Retorna el PDF de la proforma en bytes y el nombre del archivo."""
+        quotation, data = self._build_sale_quotation_document(id_quote, internal, external)
+        content = generate_proforma_pdf(data)
         return content, f"proforma_{quotation.quote_number or quotation.id_quote}.pdf"
+
+    def generate_sale_quotation_excel(self, id_quote, internal, external):
+        """Retorna el Excel de la proforma en bytes y el nombre del archivo."""
+        quotation, data = self._build_sale_quotation_document(id_quote, internal, external)
+        content = generate_proforma_excel(data)
+        return content, f"proforma_{quotation.quote_number or quotation.id_quote}.xlsx"
 
     def get_history_area(self, id_inspection: int, internal, external) -> None:
         rows = self.internal_management_repository.get_history_area(id_inspection, internal, external)

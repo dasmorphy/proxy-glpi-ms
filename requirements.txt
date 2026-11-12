@@ -79,3 +79,4 @@ argon2-cffi==25.1.0
 redis==5.0.7
 reportlab==4.2.5
 svglib==1.5.1
+openpyxl==3.1.5
