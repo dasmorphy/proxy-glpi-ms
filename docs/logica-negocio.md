@@ -640,7 +640,26 @@ Ambos salen de `InternalManagementUseCase._build_sale_quotation_document`:
   componentes (`sale_additional_materials`).
 - Mano de obra: modelo `M/V` por defecto.
 - PVP = `total / quantity`. Ganancia % = `profit_margin`; en materiales varios es
-  `profit_margin_dollar / base_price` (ponderado de sus componentes).
+  `profit_margin_dollar / (base_price + profit_margin_dollar)` (ponderado sobre la venta).
+
+### Fórmula del precio de venta (margen sobre la venta)
+
+El % de ganancia es margen sobre el precio de venta, no markup sobre el costo:
+
+```
+PVP        = costo / (1 - margen)      # 34,61 al 30 % => 49,44
+ganancia $ = PVP - costo               # 14,83 = 30 % de 49,44
+```
+
+- La calcula el front (`pw-tickets/src/app/utils/pricing.ts`, `priceFromMargin`) en la
+  proforma, en materiales varios, en el catálogo de bodega y al crear un producto
+  pendiente. El margen debe ser menor a 100 %.
+- Al cargar un producto del catálogo en la proforma, el PVP se recalcula con
+  `base_price` y `profit_margin`; no se usa el `price` guardado.
+- Hasta el 13/11/2026 se usaba `PVP = costo × (1 + margen)`. `scripts.sql` recalcula
+  `technical.technical_equipment` con la fórmula nueva. Las proformas ya guardadas
+  conservan sus precios; si se edita el costo o el % de una línea, se recalcula con la
+  fórmula nueva.
 - 404 si la proforma no existe.
 
 ### Front (pw-tickets)

@@ -1197,3 +1197,17 @@ ALTER TABLE internal_management.history_area_ticket
 ALTER TABLE internal_management.material_delivery_history
     ALTER COLUMN task_id DROP NOT NULL,
     ALTER COLUMN delivered_to DROP NOT NULL;
+
+
+-- MARGEN SOBRE LA VENTA (ver docs/logica-negocio.md, sección 7)
+-- El precio de venta pasa a ser PVP = costo / (1 - margen) en lugar de costo * (1 + margen).
+-- Recalcula el catálogo existente con la nueva fórmula; las proformas guardadas no se tocan.
+UPDATE technical.technical_equipment
+SET price = ROUND(base_price / (1 - profit_margin), 2),
+    profit_margin_dollar = ROUND(base_price / (1 - profit_margin), 2) - base_price,
+    updated_at = now(),
+    updated_by = 'margen-sobre-venta'
+WHERE base_price IS NOT NULL
+  AND profit_margin IS NOT NULL
+  AND profit_margin >= 0
+  AND profit_margin < 1;

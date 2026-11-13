@@ -50,7 +50,8 @@ class TestSaleQuotationExcel(unittest.TestCase):
         data, _ = self._data()
         catalog, _, bundle, labor = data["items"]
         self.assertAlmostEqual(float(catalog["profit_margin"]), 0.30)
-        self.assertAlmostEqual(float(bundle["profit_margin"]), 0.3036, places=4)
+        # Margen sobre la venta: 15.62 / (51.45 + 15.62)
+        self.assertAlmostEqual(float(bundle["profit_margin"]), 0.2329, places=4)
         self.assertEqual(labor["profit_margin"], Decimal("0.40"))
 
     def test_generates_workbook(self):

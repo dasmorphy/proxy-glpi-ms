@@ -503,11 +503,12 @@ class InternalManagementUseCase:
             return record.product if record else None
 
         def margin_rate(item):
-            # En los bundles el % es el ponderado de sus componentes
+            # En los bundles el % es el ponderado de sus componentes, sobre la
+            # venta: ganancia / PVP (PVP = costo + ganancia)
             base = getattr(item, "base_price", None)
             margin = getattr(item, "profit_margin_dollar", None)
-            if item.is_bundle and base and margin is not None:
-                return margin / base
+            if item.is_bundle and base is not None and margin is not None and base + margin:
+                return margin / (base + margin)
             return getattr(item, "profit_margin", None)
 
         document_items = []
