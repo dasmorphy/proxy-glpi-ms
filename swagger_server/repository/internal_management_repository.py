@@ -2746,6 +2746,12 @@ class InternalManagementRepository:
                     external,
                 )
 
+    @staticmethod
+    def _quotation_seller_user(quotation, inspection):
+        """Usuario del asesor de la proforma: sales_user de la inspección o created_by."""
+        sales_user = getattr(inspection, "sales_user", None) if inspection else None
+        return sales_user or quotation.created_by
+
     def get_sale_quotation_document(self, id_quote, internal, external):
         """Retorna todo lo necesario para generar el PDF de una proforma."""
         with self.db_telearseg.session_factory() as session:
@@ -2768,12 +2774,14 @@ class InternalManagementRepository:
                         )
                     ).scalar_one_or_none()
 
-                # created_by guarda el usuario de sesión (public.users.user)
+                # Asesor: el asignado a la inspección (sales_user) o, si no hay,
+                # quien creó la proforma (ambos son public.users.user)
+                seller_user = self._quotation_seller_user(quotation, inspection)
                 seller = None
-                if quotation.created_by:
+                if seller_user:
                     seller = session.execute(
                         select(Users.user, Users.attributes).where(
-                            Users.user == quotation.created_by
+                            Users.user == seller_user
                         )
                     ).first()
 

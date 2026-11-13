@@ -631,6 +631,10 @@ o para uso interno con el detalle de costos (Excel).
 
 Ambos salen de `InternalManagementUseCase._build_sale_quotation_document`:
 
+- Asesor (header del PDF y fila "Asesor" del Excel): `attributes.fullname` de
+  `public.users` del asesor asignado a la inspección (`inspection_technical.sales_user`);
+  si no hay asesor asignado, del usuario que creó la proforma (`sale_quotation.created_by`).
+  Sin `fullname`, se muestra el login.
 - Ítem del catálogo: modelo y descripción se toman de `technical_equipment`.
 - Materiales varios: modelo `M/V` por defecto y descripción armada con sus
   componentes (`sale_additional_materials`).

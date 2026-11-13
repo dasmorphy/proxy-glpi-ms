@@ -551,7 +551,13 @@ class InternalManagementUseCase:
             "client": company.company_name if company else None,
             "requested_by": inspection.contact if inspection else None,
             "project": inspection.title_ticket if inspection else None,
-            "seller_name": seller_attributes.get("fullname") or quotation.created_by or "",
+            # Asesor asignado a la inspección (sales_user); sin asignar, quien creó la proforma
+            "seller_name": (
+                seller_attributes.get("fullname")
+                or (getattr(inspection, "sales_user", None) if inspection else None)
+                or quotation.created_by
+                or ""
+            ),
             "items": document_items,
             "subtotal": quotation.subtotal,
             "iva_rate": getattr(quotation, "iva_rate", None),

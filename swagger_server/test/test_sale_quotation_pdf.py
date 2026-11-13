@@ -25,8 +25,9 @@ def _item(**values):
 
 
 class FakeRepository:
-    def __init__(self, seller):
+    def __init__(self, seller, sales_user=None):
         self.seller = seller
+        self.sales_user = sales_user
 
     def get_sale_quotation_document(self, id_quote, internal, external):
         quotation = SimpleNamespace(
@@ -38,6 +39,7 @@ class FakeRepository:
         )
         inspection = SimpleNamespace(
             contact="Ing. Marcelo Torres",
+            sales_user=self.sales_user,
             title_ticket="IMPLEMENTACION DE SISTEMA CCTV PERIMETRAL - TAURA 2",
         )
         company = SimpleNamespace(
@@ -67,8 +69,8 @@ class FakeRepository:
 
 
 class TestSaleQuotationPdf(unittest.TestCase):
-    def _generate(self, seller):
-        use_case = InternalManagementUseCase(FakeRepository(seller))
+    def _generate(self, seller, sales_user=None):
+        use_case = InternalManagementUseCase(FakeRepository(seller, sales_user))
         with patch(
             "swagger_server.uses_cases.internal_management_use_case.generate_proforma_pdf",
             side_effect=lambda data: data,
@@ -103,6 +105,22 @@ class TestSaleQuotationPdf(unittest.TestCase):
     def test_seller_falls_back_to_created_by(self):
         data, _ = self._generate(None)
         self.assertEqual(data["seller_name"], "obarba")
+
+    def test_seller_falls_back_to_sales_user_login(self):
+        # Asesor asignado sin fullname en public.users
+        data, _ = self._generate(None, sales_user="asesor1")
+        self.assertEqual(data["seller_name"], "asesor1")
+
+    def test_repository_looks_up_sales_user_before_created_by(self):
+        from swagger_server.repository.internal_management_repository import (
+            InternalManagementRepository,
+        )
+        seller_user = InternalManagementRepository._quotation_seller_user
+        quotation = SimpleNamespace(created_by="jefe")
+
+        self.assertEqual("asesor1", seller_user(quotation, SimpleNamespace(sales_user="asesor1")))
+        self.assertEqual("jefe", seller_user(quotation, SimpleNamespace(sales_user=None)))
+        self.assertEqual("jefe", seller_user(quotation, None))
 
     def test_generates_pdf_bytes(self):
         seller = SimpleNamespace(user="obarba", attributes={"fullname": "Odalis Barba"})
