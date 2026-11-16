@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.inspection_technical import InspectionTechnical
@@ -10,6 +11,20 @@ from swagger_server.utils.inspection_documents import (
 )
 from swagger_server.utils.proforma_excel import generate_proforma_excel
 from swagger_server.utils.proforma_pdf import format_quantity, generate_proforma_pdf
+
+PROJECT_NAME_MAX_LENGTH = 80
+
+
+def sale_quotation_file_name(quotation, project, extension):
+    """Nombre del PDF/Excel de la proforma: "<quote_number> - <proyecto>.<ext>".
+    quote_number es "<código del asesor>-<id_quote>"; sin proyecto queda solo el código."""
+    code = quotation.quote_number or str(quotation.id_quote)
+    # Caracteres no válidos en nombres de archivo (Windows) y de control
+    project = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", project or "")
+    project = re.sub(r"\s+", " ", project).strip(" .")
+    project = project[:PROJECT_NAME_MAX_LENGTH].rstrip(" .")
+    return f"{code} - {project}.{extension}" if project else f"{code}.{extension}"
+
 
 @dataclass
 class PaginationParams:
@@ -573,13 +588,13 @@ class InternalManagementUseCase:
         """Retorna el PDF de la proforma en bytes y el nombre del archivo."""
         quotation, data = self._build_sale_quotation_document(id_quote, internal, external)
         content = generate_proforma_pdf(data)
-        return content, f"proforma_{quotation.quote_number or quotation.id_quote}.pdf"
+        return content, sale_quotation_file_name(quotation, data["project"], "pdf")
 
     def generate_sale_quotation_excel(self, id_quote, internal, external):
         """Retorna el Excel de la proforma en bytes y el nombre del archivo."""
         quotation, data = self._build_sale_quotation_document(id_quote, internal, external)
         content = generate_proforma_excel(data)
-        return content, f"proforma_{quotation.quote_number or quotation.id_quote}.xlsx"
+        return content, sale_quotation_file_name(quotation, data["project"], "xlsx")
 
     def get_history_area(self, id_inspection: int, internal, external) -> None:
         rows = self.internal_management_repository.get_history_area(id_inspection, internal, external)

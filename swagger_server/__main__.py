@@ -94,7 +94,12 @@ def create_app():
     flask_app = add_handler(flask_app=flask_app)
 
     # Add CORS origins
-    CORS(flask_app.app, resources={r"/*": {"origins": "*"}})
+    # Content-Disposition expuesto para que el front lea el nombre de los archivos descargados
+    CORS(
+        flask_app.app,
+        resources={r"/*": {"origins": "*"}},
+        expose_headers=["Content-Disposition"],
+    )
 
     flask_app.app.before_request(store_request_body)
     flask_app.app.before_request(set_log_context)  # Establecer variables globales y logger

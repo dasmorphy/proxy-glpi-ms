@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from swagger_server.uses_cases.internal_management_use_case import (
     InternalManagementUseCase,
+    sale_quotation_file_name,
 )
 from swagger_server.utils.proforma_pdf import (
     format_money,
@@ -81,7 +82,9 @@ class TestSaleQuotationPdf(unittest.TestCase):
         seller = SimpleNamespace(user="obarba", attributes={"fullname": "Odalis Barba"})
         data, name = self._generate(seller)
 
-        self.assertEqual(name, "proforma_10150159.pdf")
+        self.assertEqual(
+            name, "10150159 - IMPLEMENTACION DE SISTEMA CCTV PERIMETRAL - TAURA 2.pdf"
+        )
         self.assertEqual(data["seller_name"], "Odalis Barba")
         self.assertEqual(data["requested_by"], "Ing. Marcelo Torres")
         self.assertEqual(data["client"], "INDUSTRIAL PESQUERA SANTA PRISCILA S.A.")
@@ -133,6 +136,37 @@ class TestSaleQuotationPdf(unittest.TestCase):
         self.assertEqual(format_money(None), "0,00")
         self.assertEqual(format_quantity(Decimal("6.00")), "6")
         self.assertEqual(format_quantity(Decimal("2.50")), "2,5")
+
+
+class TestSaleQuotationFileName(unittest.TestCase):
+    def test_code_and_project(self):
+        quotation = SimpleNamespace(quote_number="JPEREZ-0042", id_quote=42)
+        self.assertEqual(
+            sale_quotation_file_name(quotation, "Instalación cámaras bodega norte", "pdf"),
+            "JPEREZ-0042 - Instalación cámaras bodega norte.pdf",
+        )
+
+    def test_removes_invalid_characters(self):
+        quotation = SimpleNamespace(quote_number="JPEREZ-0042", id_quote=42)
+        self.assertEqual(
+            sale_quotation_file_name(quotation, ' CCTV: "Bodega"/Norte\n2 ', "xlsx"),
+            "JPEREZ-0042 - CCTV Bodega Norte 2.xlsx",
+        )
+
+    def test_truncates_long_project(self):
+        quotation = SimpleNamespace(quote_number="JPEREZ-0042", id_quote=42)
+        name = sale_quotation_file_name(quotation, "A" * 200, "pdf")
+        self.assertEqual(name, f"JPEREZ-0042 - {'A' * 80}.pdf")
+
+    def test_without_project_or_quote_number(self):
+        self.assertEqual(
+            sale_quotation_file_name(SimpleNamespace(quote_number="JPEREZ-0042", id_quote=42), None, "pdf"),
+            "JPEREZ-0042.pdf",
+        )
+        self.assertEqual(
+            sale_quotation_file_name(SimpleNamespace(quote_number=None, id_quote=42), " / ", "pdf"),
+            "42.pdf",
+        )
 
 
 if __name__ == "__main__":

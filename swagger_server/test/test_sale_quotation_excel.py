@@ -27,7 +27,9 @@ class TestSaleQuotationExcel(unittest.TestCase):
 
     def test_name_and_header_fields(self):
         data, name = self._data()
-        self.assertEqual(name, "proforma_10150159.xlsx")
+        self.assertEqual(
+            name, "10150159 - IMPLEMENTACION DE SISTEMA CCTV PERIMETRAL - TAURA 2.xlsx"
+        )
         self.assertEqual(data["client"], "INDUSTRIAL PESQUERA SANTA PRISCILA S.A.")
         self.assertEqual(data["ruc"], "0991257721001")
         self.assertEqual(data["project"], "IMPLEMENTACION DE SISTEMA CCTV PERIMETRAL - TAURA 2")

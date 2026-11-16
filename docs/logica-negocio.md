@@ -639,6 +639,12 @@ Ambos salen de `InternalManagementUseCase._build_sale_quotation_document`:
 - Materiales varios: modelo `M/V` por defecto y descripción armada con sus
   componentes (`sale_additional_materials`).
 - Mano de obra: modelo `M/V` por defecto.
+- Nombre del archivo (`sale_quotation_file_name`): `<quote_number> - <proyecto>.pdf|xlsx`,
+  p. ej. `JPEREZ-0042 - Instalación cámaras bodega norte.pdf`. `quote_number` es
+  `<código del asesor>-<id_quote 4 dígitos>`; proyecto = `inspection_technical.title_ticket`
+  sin caracteres inválidos en nombres de archivo y recortado a 80 caracteres. Sin
+  proyecto: `<quote_number>.pdf`; sin `quote_number` se usa `id_quote`. Va en
+  `Content-Disposition` (`filename*` UTF-8 conserva tildes); CORS expone ese header.
 - PVP = `total / quantity`. Ganancia % = `profit_margin`; en materiales varios es
   `profit_margin_dollar / (base_price + profit_margin_dollar)` (ponderado sobre la venta).
 
@@ -665,7 +671,10 @@ ganancia $ = PVP - costo               # 14,83 = 30 % de 49,44
 ### Front (pw-tickets)
 
 `ticket-detail-sidebar`: botones ver/descargar PDF y descargar Excel
-(`GlpiService.downloadSaleQuote` / `downloadSaleQuoteExcel`).
+(`GlpiService.downloadSaleQuote` / `downloadSaleQuoteExcel`, con `observe: 'response'`).
+El nombre de la descarga se toma de `Content-Disposition` con
+`UtilsService.fileNameFromHeaders`; `cotizacion-<id>.pdf` / `proforma-<id>.xlsx` solo
+si el header no llega.
 
 ### Tests
 
