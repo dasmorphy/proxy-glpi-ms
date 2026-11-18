@@ -86,6 +86,14 @@ class InternalManagementRepository:
         return f"INS-{datetime.now().year}-{management_id:04d}"
 
     @staticmethod
+    def generate_code_support(management_id):
+        return f"SOP-{datetime.now().year}-{management_id:04d}"
+
+    @staticmethod
+    def generate_code_assistance(management_id):
+        return f"AST-{datetime.now().year}-{management_id:04d}"
+
+    @staticmethod
     def generate_code_quote(sales_code, management_id):
         return f"{sales_code}-{management_id:04d}"
 
@@ -559,9 +567,18 @@ class InternalManagementRepository:
                 session.add(new_inspection)
                 session.flush()
 
-                new_inspection.code = self.generate_code_inspection(
-                    new_inspection.id_inspection
-                )
+                if inspection_type == "Asistencia":
+                    new_inspection.code = self.generate_code_assistance(
+                        new_inspection.id_inspection
+                    )
+                elif inspection_type == "Soporte":
+                    new_inspection.code = self.generate_code_support(
+                        new_inspection.id_inspection
+                    )
+                else:
+                    new_inspection.code = self.generate_code_inspection(
+                        new_inspection.id_inspection
+                    )
 
                 new_history_area = HistoryAreaTicket(
                     ticket_id=new_inspection.id_inspection,
