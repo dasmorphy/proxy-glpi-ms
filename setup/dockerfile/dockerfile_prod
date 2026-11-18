@@ -4,9 +4,6 @@ FROM python:3.10-slim
 ENV TZ=America/Guayaquil
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Actualiza e instala paquetes necesarios OS
-RUN apt-get update \
-    && rm -rf /var/lib/apt/lists/*
 
 # Establecer directorio de trabajo
 WORKDIR /usr/src/app
@@ -14,12 +11,17 @@ WORKDIR /usr/src/app
 # Crear carpeta logs
 RUN mkdir -p /usr/src/app /usr/src/app/logs
 
+# Pip con versión fija (no "latest")
+RUN pip3 install --no-cache-dir "pip==24.2"
+
+# Solo requirements primero → esta capa queda en caché
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt \
+ || pip3 install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
+
 # Copiar archivos al contenedor
 COPY . /usr/src/app
 
-# Instalar librerias PYTHON
-RUN pip3 install --upgrade pip
-RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Exponer el puerto
 EXPOSE 2127

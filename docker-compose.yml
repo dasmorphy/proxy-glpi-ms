@@ -1,10 +1,11 @@
-version: '3'
 services:
     backend-test:
         container_name: proxy-glpi-ms
         build:
           context: .
           dockerfile: ./setup/dockerfile/dockerfile_prod
+        env_file:
+          - .env
         environment:
           FLASK_DEBUG: true
           FLASK_APP: swagger_server.__main__:app

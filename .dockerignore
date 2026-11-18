@@ -73,3 +73,9 @@ target/
 
 # Documentos subidos de las inspecciones
 inspection-documents/
+
+.git
+.gitignore
+.env
+docker-compose.yml
+dockerfile_prod
