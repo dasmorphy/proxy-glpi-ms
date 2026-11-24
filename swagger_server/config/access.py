@@ -38,6 +38,10 @@ def access():
         },
         "STORAGE": {
             "INSPECTION_DOCUMENTS": os.getenv("INSPECTION_DOCUMENTS_PATH", "inspection-documents"),
+            # Imágenes de los registros técnicos de campo: misma carpeta pública que usa
+            # technical-control-ms (nginx la sirve en /uploads/technical)
+            "FIELD_RECORD_IMAGES": os.getenv("FIELD_RECORD_IMAGES_PATH", "/var/www/uploads/technical"),
+            "FIELD_RECORD_IMAGES_URL": os.getenv("FIELD_RECORD_IMAGES_URL", "/uploads/technical"),
         },
     }
 

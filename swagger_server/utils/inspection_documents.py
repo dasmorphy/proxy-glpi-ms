@@ -21,6 +21,14 @@ def get_documents_folder():
     return access()["STORAGE"]["INSPECTION_DOCUMENTS"]
 
 
+def get_field_images_folder():
+    return access()["STORAGE"]["FIELD_RECORD_IMAGES"]
+
+
+def get_field_images_url():
+    return "/" + access()["STORAGE"]["FIELD_RECORD_IMAGES_URL"].strip("/")
+
+
 def get_extension(filename):
     return os.path.splitext(filename or "")[1].lower().lstrip(".")
 
@@ -44,16 +52,38 @@ def validate_documents(files):
         )
 
 
+def _document_filename(file, inspection_id):
+    original_name = secure_filename(file.filename) or f"documento.{get_extension(file.filename)}"
+    return f"{inspection_id}_{uuid.uuid4().hex[:12]}_{original_name}"
+
+
 def save_document(file, inspection_id):
     """Guarda el archivo y retorna la ruta relativa que se registra en BD."""
     folder = get_documents_folder()
     os.makedirs(folder, exist_ok=True)
 
-    original_name = secure_filename(file.filename) or f"documento.{get_extension(file.filename)}"
-    filename = f"{inspection_id}_{uuid.uuid4().hex[:12]}_{original_name}"
-    document_path = os.path.join(folder, filename).replace("\\", "/")
+    document_path = os.path.join(folder, _document_filename(file, inspection_id)).replace("\\", "/")
     file.save(document_path)
     return document_path
+
+
+def save_field_record_image(file, inspection_id):
+    """Guarda una imagen de registro técnico de campo en la carpeta pública.
+
+    Retorna (ruta pública que se registra en BD, ruta en disco). La ruta pública
+    (/uploads/technical/...) se abre con TECHNICAL_BASE_URL, igual que las
+    imágenes de technical-control-ms.
+    """
+    folder = get_field_images_folder()
+    if not os.path.isdir(folder):
+        raise CustomAPIException(f"La carpeta de imágenes no existe: {folder}", 500)
+    if not os.access(folder, os.W_OK):
+        raise CustomAPIException(f"No hay permisos de escritura en la carpeta de imágenes: {folder}", 500)
+
+    filename = _document_filename(file, inspection_id)
+    disk_path = os.path.join(folder, filename).replace("\\", "/")
+    file.save(disk_path)
+    return f"{get_field_images_url()}/{filename}", disk_path
 
 
 def document_mimetype(filename, declared=None):
@@ -73,6 +103,13 @@ def resolve_document_path(document_path):
     """Ruta absoluta del archivo, solo si existe y está dentro de la carpeta de documentos."""
     folder = os.path.realpath(get_documents_folder())
     full_path = os.path.realpath(document_path or "")
+    public_prefix = get_field_images_url() + "/"
+    if (document_path or "").startswith(public_prefix):
+        # Imagen de registro de campo: la BD guarda la ruta pública
+        folder = os.path.realpath(get_field_images_folder())
+        full_path = os.path.realpath(
+            os.path.join(folder, document_path[len(public_prefix):])
+        )
     try:
         inside_folder = os.path.commonpath([folder, full_path]) == folder
     except ValueError:  # rutas en distintas unidades (Windows)

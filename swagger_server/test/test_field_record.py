@@ -1,13 +1,21 @@
 """Registros técnicos de campo (app) de Soportes / Asistencias en /register-technical."""
+import io
+import os
+import tempfile
 import unittest
+from unittest import mock
+
+from werkzeug.datastructures import FileStorage
 
 from sqlalchemy import select
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
+from swagger_server.models.db.inspection_documents import InspectionDocuments
 from swagger_server.models.db.inspection_technical import InspectionTechnical
 from swagger_server.models.db.tech_staff_record import TechStaffRecord
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
+from swagger_server.utils.inspection_documents import resolve_document_path
 from swagger_server.test import test_inspection_type as base
 from swagger_server.test.test_inspection_type import (
     TECHNICIAN_A,
@@ -229,6 +237,32 @@ class TestFieldRecord(unittest.TestCase):
         sql = inspection_sql({})
 
         self.assertIn("technical_ticket_management.is_field_record IS 0", sql.replace("false", "0"))
+
+    def test_field_record_images_go_to_public_folder(self):
+        inspection = create(self.repository, type="Soporte")
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(
+            os.environ,
+            {"FIELD_RECORD_IMAGES_PATH": folder, "FIELD_RECORD_IMAGES_URL": "/uploads/technical"},
+        ):
+            image = FileStorage(
+                io.BytesIO(b"webp"), filename="registro_tecnico_0.webp", content_type="image/webp"
+            )
+            self.repository.post_ticket_technical(
+                {"inspection_id": inspection.id_inspection, "field_record": True, "user": "tecnico"},
+                "i", "e", files=[image],
+            )
+
+            with self.repository.db_telearseg.session_factory() as session:
+                document = session.execute(select(InspectionDocuments)).scalar_one()
+
+            filename = document.document_path.rsplit("/", 1)[-1]
+            self.assertTrue(document.document_path.startswith("/uploads/technical/"))
+            self.assertTrue(os.path.isfile(os.path.join(folder, filename)))
+            # La descarga por /inspection-documents/{id} sigue resolviendo el archivo
+            self.assertEqual(
+                os.path.realpath(os.path.join(folder, filename)),
+                resolve_document_path(document.document_path),
+            )
 
 
 if __name__ == "__main__":

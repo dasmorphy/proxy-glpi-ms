@@ -293,6 +293,17 @@ ticket.
 - `_save_inspection_documents` escribe los archivos dentro de la misma
   transacción. Si la transacción falla, `remove_documents` borra los archivos
   ya escritos.
+- Las imágenes de los registros técnicos de campo (`management_technical_id`
+  informado) **no** van a `INSPECTION_DOCUMENTS_PATH`: `save_field_record_image`
+  las escribe en `FIELD_RECORD_IMAGES_PATH` (por defecto
+  `/var/www/uploads/technical`, la carpeta que nginx publica y que también usa
+  technical-control-ms) y en `document_path` guarda la ruta pública
+  `FIELD_RECORD_IMAGES_URL/<archivo>` (`/uploads/technical/...`). Así la app y la
+  web las abren con `TECHNICAL_BASE_URL + document_path`, como las imágenes de
+  `tech_record_image`. `resolve_document_path` traduce esa ruta pública a la
+  carpeta en disco, así que `GET /inspection-documents/{id}` también las sirve.
+  El contenedor necesita el volumen `/var/www/uploads/technical` con permiso de
+  escritura (ver `docker-compose.yml`).
 
 ### Front (pw-tickets)
 
@@ -414,8 +425,9 @@ proyecto. Una Inspección lo asigna al crear el proyecto.
     - `register_technical` (nuevo, `_add_field_records`): `id_management_technical`,
       `code_management`, `resume` (= `description`), `vehicle`, `status`
       (= `record_status`), `approval_status` (= `status` del flujo),
-      `technical_staff`, `materials` e `images` (rutas de `inspection_documents`
-      del registro; se sirven desde `TECHNICAL_BASE_URL`).
+      `technical_staff`, `materials` e `images` (rutas públicas
+      `/uploads/technical/...` de `inspection_documents` del registro; se abren
+      con `TECHNICAL_BASE_URL`).
 
 ### Registros técnicos de campo (app)
 
@@ -431,7 +443,7 @@ web y se distinguen por `is_field_record`:
 | Tipos | Inspección y Asistencia (Soporte → 400) | Soporte y Asistencia (Inspección → 400) |
 | `vehicle`, `record_status` | `NULL` | Del registro (`record_status`: `Completado` / `Incompleto`) |
 | Personal | — | `technical.tech_staff_record` (`inspection_id` + `management_technical_id`) |
-| Imágenes / documentos | `inspection_documents` (`management_technical_id NULL`) | `inspection_documents` con su `management_technical_id` |
+| Imágenes / documentos | `inspection_documents` (`management_technical_id NULL`), archivo en `INSPECTION_DOCUMENTS_PATH` | `inspection_documents` con su `management_technical_id`, archivo en `FIELD_RECORD_IMAGES_PATH` (ruta pública `/uploads/technical/...`) |
 
 - Se quitó el `UNIQUE (inspection_id)` de `technical_ticket_management`; la regla
   "una gestión por inspección" la valida la API solo para `is_field_record = false`.

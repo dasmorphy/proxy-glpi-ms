@@ -44,6 +44,7 @@ from swagger_server.utils.inspection_documents import (
     document_mimetype,
     remove_documents,
     save_document,
+    save_field_record_image,
     validate_documents,
 )
 
@@ -518,11 +519,16 @@ class InternalManagementRepository:
         """Escribe los archivos en disco y registra cada ruta en inspection_documents.
 
         Las rutas escritas se agregan a saved_paths para poder eliminarlas si la
-        transacción falla antes del commit.
+        transacción falla antes del commit. Las imágenes de un registro de campo
+        (management_technical_id) van a la carpeta pública de imágenes técnicas y
+        en BD queda su ruta pública (/uploads/technical/...).
         """
         for file in files:
-            document_path = save_document(file, inspection_id)
-            saved_paths.append(document_path)
+            if management_technical_id is not None:
+                document_path, disk_path = save_field_record_image(file, inspection_id)
+            else:
+                document_path = disk_path = save_document(file, inspection_id)
+            saved_paths.append(disk_path)
             session.add(
                 InspectionDocuments(
                     inspection_id=inspection_id,
