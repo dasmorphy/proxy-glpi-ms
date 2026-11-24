@@ -26,6 +26,13 @@ class InspectionDocuments(Base):
         ForeignKey('internal_management.inspection_technical.id_inspection', onupdate='NO ACTION', ondelete='NO ACTION'),
     )
 
+    # Registro de campo (technical_ticket_management) al que pertenece la imagen;
+    # NULL en los documentos del resto del flujo
+    management_technical_id = Column(
+        Integer,
+        ForeignKey('internal_management.technical_ticket_management.id_management_technical'),
+    )
+
     document_path = Column(Text)
     name_document = Column(Text)
     type_document = Column(Text)

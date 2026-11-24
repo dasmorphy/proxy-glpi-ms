@@ -256,11 +256,11 @@ class TestAssistanceIsNotReadyForProject(unittest.TestCase):
     def test_ready_flag_is_false_for_assistance_outside_projects(self):
         rows = [
             (listed(id_inspection=1, type="Asistencia", management_area="Financiera"),
-             None, 5, "Aprobada", None, None, None, None, None, None, None, None, []),
+             None, 5, "Aprobada", None, None, None, None, None, None, None, None, [], None),
             (listed(id_inspection=2, type="Asistencia", management_area="Proyectos"),
-             None, 5, "Aprobada", None, None, None, None, None, None, None, None, []),
+             None, 5, "Aprobada", None, None, None, None, None, None, None, None, [], None),
             (listed(id_inspection=3, type="Inspección", management_area="Proyectos"),
-             None, 5, "Aprobada", None, None, None, None, None, None, None, None, []),
+             None, 5, "Aprobada", None, None, None, None, None, None, None, None, [], None),
         ]
         repository = SimpleNamespace(get_inspection_technical=lambda *args: rows)
 

@@ -382,6 +382,90 @@ también al editar.
   `GET /inspection?pending_commercial=true` (en el flujo, `status = 'Listo para
   cotizar'` y sin registro comercial). Las que siguen en Técnica no cuentan.
 
+### Personal técnico y registros técnicos
+
+Un Soporte o una Asistencia tiene su propio **personal técnico**, como un
+proyecto. Una Inspección lo asigna al crear el proyecto.
+
+- Tabla `internal_management.inspection_technical_assignments`
+  (`InspectionTechnicalAssignment`): `inspection_id` + `user_id`
+  (`public.users.id_user`, sin FK porque `public.users` es una tabla foránea; la
+  existencia la valida la API), única por par. Equivale a
+  `technical.task_technical_assignments`.
+- `assigned_technicians` (lista de `id_user`), en `data`:
+  - `POST /inspection`: obligatoria con al menos uno para Soporte y Asistencia
+    (`_save_technicians`); se ignora en una Inspección. Se quitan los repetidos.
+  - `PUT /inspection/{id}`: si llega, **reemplaza** la guardada (vacía → 400); si
+    no llega, se conserva. Así los Soportes / Asistencias anteriores a este cambio
+    (sin personal) se siguen editando. Al pasar a Inspección se elimina.
+  - Un id que no es UUID o no existe en `public.users` → 400.
+- `technical.technical_record.inspection_id` (nullable): registro técnico hecho
+  sobre un Soporte / Asistencia con el **flujo anterior** (technical-control-ms).
+  Los de proyecto lo dejan en `NULL`. Solo se lee: los registros nuevos van a
+  `/register-technical` (ver "Registros técnicos de campo").
+- `GET /inspection` y `GET /register-technical` (`_support_staff`) devuelven en
+  cada Soporte / Asistencia:
+  - `assigned_technicians`: `[{id_user, user, fullname}]`.
+  - `record_technical`: los registros de los dos flujos, más recientes primero.
+    `source` indica el origen:
+    - `technical_record` (anterior): `id_record`, `resume`, `vehicle`, `status`,
+      `created_by`, `created_at`, … e `images` (rutas de
+      `technical.tech_record_image`, modelo de solo lectura `TechRecordImage`).
+    - `register_technical` (nuevo, `_add_field_records`): `id_management_technical`,
+      `code_management`, `resume` (= `description`), `vehicle`, `status`
+      (= `record_status`), `approval_status` (= `status` del flujo),
+      `technical_staff`, `materials` e `images` (rutas de `inspection_documents`
+      del registro; se sirven desde `TECHNICAL_BASE_URL`).
+
+### Registros técnicos de campo (app)
+
+Los técnicos registran su trabajo en un Soporte / Asistencia desde la app con
+`POST /register-technical` y `field_record = true`. Conviven en
+`internal_management.technical_ticket_management` con la gestión técnica de la
+web y se distinguen por `is_field_record`:
+
+| | Gestión técnica (web) | Registro de campo (app) |
+|---|---|---|
+| `is_field_record` | `false` | `true` |
+| Por caso | Una (409 si ya existe) | Varias |
+| Tipos | Inspección y Asistencia (Soporte → 400) | Soporte y Asistencia (Inspección → 400) |
+| `vehicle`, `record_status` | `NULL` | Del registro (`record_status`: `Completado` / `Incompleto`) |
+| Personal | — | `technical.tech_staff_record` (`inspection_id` + `management_technical_id`) |
+| Imágenes / documentos | `inspection_documents` (`management_technical_id NULL`) | `inspection_documents` con su `management_technical_id` |
+
+- Se quitó el `UNIQUE (inspection_id)` de `technical_ticket_management`; la regla
+  "una gestión por inspección" la valida la API solo para `is_field_record = false`.
+- Bloqueos (`_ensure_field_record_allowed`, en el POST y el PUT): 400 si el caso
+  tiene `approve_support = true` o si `management_area` no es `NULL` ni `Técnica`
+  (el Soporte nunca sale de Técnica).
+- `technical_staff` (lista de `id_user`) se guarda **solo si llega**; en el PUT,
+  si llega reemplaza el personal del registro. Un id que no es UUID → 400.
+- `PUT /register-technical`: con `id_management_technical` de un registro de campo
+  actualiza `description`, `vehicle`, `record_status`, `materials`,
+  `technical_staff` y agrega sus imágenes, sin tocar el flujo. **Sin**
+  `id_management_technical` se edita la gestión de la web, nunca un registro de campo.
+- Todas las consultas del flujo usan solo la gestión (`is_field_record = false`):
+  `GET /register-technical`, el join de `GET /inspection` (`technical_id`,
+  `description_technical`, `pending_technical`), contadores del dashboard,
+  `_inspection_started_flow`, devolver a Técnica y los materiales de la proforma
+  (`get_inspection_materials` y su validación). Los materiales de los registros
+  de campo **no** pasan a la proforma.
+- Aprobación (`_approve_technical_records`): `approve-support` (Soporte) y
+  `approve-technical-inspection` (Asistencia) marcan `Aprobado` la gestión y todos
+  los registros de campo del caso. La Asistencia se puede aprobar aunque no tenga
+  gestión ni registros; la Inspección sigue exigiendo su gestión (404).
+- Registros recientes del técnico: technical-control-ms (`GET /technical_record`)
+  une `technical_record` y los registros de campo (`source`).
+
+  En una Inspección ambos son `[]`. El filtro del técnico (`responsible` /
+  `responsible_id`) **no** cambia: sigue siendo el responsable, no el personal
+  técnico.
+- `GET /inspection?technical=<id_user>` (UUID; otro valor → 400): registros
+  donde ese usuario es el responsable (`responsible_id`) **o** está en el
+  personal técnico (`inspection_technical_assignments`), vía
+  `_technical_condition`. Se combina con los demás filtros (p. ej. `type`). No
+  aplica la regla de Asistencias completadas de `responsible` / `responsible_id`.
+
 ### Aprobación comercial de la Asistencia
 
 Cuando la gestión comercial de una Asistencia pasa a Aprobada (`status_id = 5`):
@@ -435,22 +519,35 @@ de `material_delivery_history` como nullable.
   el `type` guardado; si no, el formulario reenviaría `Inspección` y convertiría un
   Soporte. Con Soporte o Asistencia se ocultan "Fecha compromiso" y se muestran
   "Fecha inicio" y "Fecha fin" (obligatorias); al guardar se envía en `null` la
-  fecha que no corresponde al tipo.
+  fecha que no corresponde al tipo. Con Soporte o Asistencia también muestra el
+  multiselect obligatorio "Personal técnico" (`assigned_technicians`); con una
+  Inspección se envía `[]`. Al editar se carga desde `assigned_technicians`.
+- `components/support-records`: contenido de la fila expandida de un Soporte /
+  Asistencia (chips del personal técnico + tabla de `record_technical`, como en
+  Proyectos técnicos) con las mismas acciones: ver detalle (modal con imágenes),
+  descargar el PDF y eliminar (permiso `ELIMINAR_REGISTRO_TECNICO`). El PDF y el
+  borrado usan los endpoints de technical-control-api por `id_record`
+  (`/technical_record/pdf`, `DELETE /technical_record/{id}`), que no requieren
+  proyecto; al eliminar emite `recordDeleted` y la página vuelve a consultar. Lo usan `inspections-technical` en la ruta
+  `/soportes-asistencias` (columna para expandir y "N. registros"; `dataKey` es
+  `id_inspection`) y la pestaña Soportes / Asistencias de `inspections-approval`.
 - `tickets-technical`: la Asistencia aparece en pendientes para "Registro" (formulario
   de materiales). El técnico consulta `/register-technical` con `responsible`.
 - `inspections-approval` ("Por aprobar"):
   - Pestaña Inspecciones: `/register-technical` con `type=Inspección`.
-  - Pestaña Soportes / Asistencias: Soportes de `/inspection`
-    (`type=Soporte&pending_approve_support=true`) + Asistencias de
-    `/register-technical` (`type=Asistencia&status=Pendiente aprobación`).
+  - Pestaña Soportes / Asistencias: Soportes y Asistencias de `/inspection`
+    (`type=Soporte&type=Asistencia&pending_approve_support=true`), con o sin
+    registros técnicos.
   - Asistencia: "Editar" abre `/registro-inspeccion-tecnica/:id` (materiales) y
     "Aprobar" usa `approve-technical-inspection`. Soporte: "Editar" abre el
     formulario de la inspección y "Aprobar" usa `approve-support`.
 
 ### Tests
 
-`swagger_server/test/test_inspection_type.py` y
-`swagger_server/test/test_assistance_financial.py` (aprobación comercial).
+`swagger_server/test/test_inspection_type.py` (personal técnico:
+`TestSupportTechnicians`), `swagger_server/test/test_field_record.py` (registros
+de campo) y `swagger_server/test/test_assistance_financial.py`
+(aprobación comercial).
 
 ---
 

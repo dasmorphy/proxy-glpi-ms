@@ -1211,3 +1211,84 @@ WHERE base_price IS NOT NULL
   AND profit_margin IS NOT NULL
   AND profit_margin >= 0
   AND profit_margin < 1;
+
+
+-- PERSONAL TÉCNICO DE SOPORTES / ASISTENCIAS (ver docs/logica-negocio.md, sección 3)
+-- Equivalente a technical.task_technical_assignments de un proyecto: ids de public.users.
+-- public.users es una tabla foránea (FDW): no admite FK, la API valida que el
+-- usuario exista antes de guardar (_save_technicians).
+CREATE SEQUENCE IF NOT EXISTS internal_management.inspection_technical_assignments_id_seq;
+
+CREATE TABLE IF NOT EXISTS internal_management.inspection_technical_assignments
+(
+    id_assignment integer NOT NULL DEFAULT nextval('internal_management.inspection_technical_assignments_id_seq'::regclass),
+    inspection_id integer NOT NULL,
+    user_id uuid NOT NULL,
+    created_by text,
+    created_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT inspection_technical_assignments_pkey PRIMARY KEY (id_assignment),
+    CONSTRAINT inspection_technical_assignments_unique UNIQUE (inspection_id, user_id),
+    CONSTRAINT inspection_technical_assignments_inspection_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+);
+
+ALTER SEQUENCE internal_management.inspection_technical_assignments_id_seq
+    OWNED BY internal_management.inspection_technical_assignments.id_assignment;
+
+-- Registros técnicos hechos sobre un Soporte / Asistencia (sin proyecto)
+ALTER TABLE technical.technical_record
+    ADD COLUMN IF NOT EXISTS inspection_id integer,
+    ADD CONSTRAINT technical_record_inspection_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION;
+
+CREATE INDEX IF NOT EXISTS technical_record_inspection_idx
+    ON technical.technical_record (inspection_id);
+
+
+-- REGISTROS TÉCNICOS DE CAMPO (APP) DE SOPORTES / ASISTENCIAS EN /register-technical
+-- Una inspección puede tener varios registros de campo además de la gestión técnica
+-- de la web. is_field_record los distingue: la lógica del flujo (pending_technical,
+-- devolver a Técnica, materiales de la proforma) solo usa la gestión (false).
+ALTER TABLE internal_management.technical_ticket_management
+    DROP CONSTRAINT IF EXISTS technical_ticket_inspection_unique;
+
+ALTER TABLE internal_management.technical_ticket_management
+    ADD COLUMN IF NOT EXISTS vehicle text,
+    -- Completado / Incompleto del registro de campo (status es el del flujo de aprobación)
+    ADD COLUMN IF NOT EXISTS record_status text,
+    ADD COLUMN IF NOT EXISTS is_field_record boolean NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS technical_ticket_management_inspection_idx
+    ON internal_management.technical_ticket_management (inspection_id, is_field_record);
+
+-- Personal del registro de campo: se reutiliza technical.tech_staff_record
+ALTER TABLE technical.tech_staff_record
+    ALTER COLUMN record_id DROP NOT NULL,
+    ADD COLUMN IF NOT EXISTS inspection_id integer,
+    ADD COLUMN IF NOT EXISTS management_technical_id integer,
+    ADD CONSTRAINT tech_staff_record_inspection_fkey FOREIGN KEY (inspection_id)
+        REFERENCES internal_management.inspection_technical (id_inspection) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    ADD CONSTRAINT tech_staff_record_management_fkey FOREIGN KEY (management_technical_id)
+        REFERENCES internal_management.technical_ticket_management (id_management_technical) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS tech_staff_record_management_idx
+    ON technical.tech_staff_record (management_technical_id);
+
+-- Imágenes de cada registro de campo (NULL en los documentos del resto del flujo)
+ALTER TABLE internal_management.inspection_documents
+    ADD COLUMN IF NOT EXISTS management_technical_id integer,
+    ADD CONSTRAINT inspection_documents_management_fkey FOREIGN KEY (management_technical_id)
+        REFERENCES internal_management.technical_ticket_management (id_management_technical) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION;
+
+CREATE INDEX IF NOT EXISTS inspection_documents_management_idx
+    ON internal_management.inspection_documents (management_technical_id);

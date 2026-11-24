@@ -14,6 +14,7 @@ from swagger_server.uses_cases.internal_management_use_case import (
 def inspection(**overrides):
     values = {
         "id_inspection": 7,
+        "type": None,
         "management_area": "Proyectos",
         "next_area": "Financiera",
         "title_ticket": "Inspeccion de sitio",
@@ -81,10 +82,10 @@ class TestInspectionReadyForProjectUseCase(unittest.TestCase):
                     type_document="application/pdf",
                     created_at=datetime(2026, 1, 3),
                 ),
-            ]),
-            (inspection(id_inspection=2), 40, 5, "Aprobada", 12, None, None, None, None, None, []),
-            (inspection(id_inspection=3), None, 6, "Rechazada", None, None, None, None, None, None, []),
-            (inspection(id_inspection=4), None, None, None, None, None, None, None, None, None, []),
+            ], None),
+            (inspection(id_inspection=2), 40, 5, "Aprobada", 12, None, None, None, None, None, [], None),
+            (inspection(id_inspection=3), None, 6, "Rechazada", None, None, None, None, None, None, [], None),
+            (inspection(id_inspection=4), None, None, None, None, None, None, None, None, None, [], None),
         ])
         use_case = InternalManagementUseCase(repository)
 

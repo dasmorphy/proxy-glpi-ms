@@ -14,12 +14,20 @@ from swagger_server.models.db.financial_ticket_management import FinancialTicket
 from swagger_server.models.db.history_area_ticket import HistoryAreaTicket
 from swagger_server.models.db.inspection_documents import InspectionDocuments
 from swagger_server.models.db.inspection_technical import InspectionTechnical
+from swagger_server.models.db.inspection_technical_assignments import (
+    InspectionTechnicalAssignment,
+)
 from swagger_server.models.db.material_tech_ticket import MaterialTechTicket
 from swagger_server.models.db.pending_material import PendingMaterial
 from swagger_server.models.db.task_technical import TaskTechnical
+from swagger_server.models.db.tech_record_image import TechRecordImage
+from swagger_server.models.db.technical_record import TechnicalRecord
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 from swagger_server.repository.internal_management_repository import (
     InternalManagementRepository,
+)
+from swagger_server.uses_cases.internal_management_use_case import (
+    InternalManagementUseCase,
 )
 
 
@@ -33,7 +41,18 @@ TABLES = [
     CommercialTicketManagement.__table__,
     FinancialTicketManagement.__table__,
     TaskTechnical.__table__,
+    InspectionTechnicalAssignment.__table__,
+    TechnicalRecord.__table__,
+    TechRecordImage.__table__,
 ]
+
+# public.users no existe en SQLite: _find_users se reemplaza con estos usuarios
+TECHNICIAN_A = uuid.UUID("11111111-1111-1111-1111-111111111111")
+TECHNICIAN_B = uuid.UUID("22222222-2222-2222-2222-222222222222")
+USERS = {
+    TECHNICIAN_A: ("tecnico_a", "Técnico A"),
+    TECHNICIAN_B: ("tecnico_b", "Técnico B"),
+}
 
 
 def sqlite_repository():
@@ -51,6 +70,9 @@ def sqlite_repository():
     Base.metadata.create_all(engine, tables=TABLES)
     repository = InternalManagementRepository.__new__(InternalManagementRepository)
     repository.db_telearseg = SimpleNamespace(session_factory=sessionmaker(engine))
+    repository._find_users = lambda session, ids: {
+        user_id: USERS[user_id] for user_id in ids if user_id in USERS
+    }
     return repository
 
 
@@ -59,7 +81,7 @@ SUPPORT_DATES = {"start_date": "2026-10-30T13:00:00Z", "end_date": "2026-10-31T1
 
 def create(repository, **body):
     if body.get("type") in ("Soporte", "Asistencia"):
-        body = {**SUPPORT_DATES, **body}
+        body = {**SUPPORT_DATES, "assigned_technicians": [str(TECHNICIAN_A)], **body}
     body = {"title_ticket": "Ticket", "user": "dmales", **body}
     repository.post_inspection_technical(body, "internal", "external", files=[])
     with repository.db_telearseg.session_factory() as session:
@@ -534,7 +556,7 @@ class TestTechnicalRegisterResponsibleFilter(unittest.TestCase):
 
     def keys(self, filters):
         rows = self.repository.get_ticket_technical(filters, "i", "e")
-        return {self.ids[ticket.id_inspection] for _, ticket, _ in rows}
+        return {self.ids[ticket.id_inspection] for _, ticket, _, _ in rows}
 
     def test_responsible_hides_completed_assistances(self):
         self.assertEqual(
@@ -551,6 +573,171 @@ class TestTechnicalRegisterResponsibleFilter(unittest.TestCase):
             {"assistance_in_progress", "assistance_without_status"},
             self.keys({"responsible": uuid.UUID(self.RESPONSIBLE), "type": ["Asistencia"]}),
         )
+
+
+class TestSupportTechnicians(unittest.TestCase):
+    """Personal técnico (assigned_technicians) de Soporte / Asistencia y sus
+    registros técnicos (technical_record.inspection_id)."""
+
+    def setUp(self):
+        self.repository = sqlite_repository()
+
+    def technicians(self, inspection_id):
+        with self.repository.db_telearseg.session_factory() as session:
+            return session.execute(
+                select(InspectionTechnicalAssignment.user_id)
+                .where(InspectionTechnicalAssignment.inspection_id == inspection_id)
+                .order_by(InspectionTechnicalAssignment.id_assignment)
+            ).scalars().all()
+
+    def update(self, inspection_id, **body):
+        self.repository.update_inspection_technical(
+            inspection_id, {"user": "dmales", **body}, "i", "e"
+        )
+
+    def assert_rejected(self, **body):
+        with self.assertRaises(CustomAPIException) as context:
+            create(self.repository, **body)
+        self.assertEqual(400, context.exception.status_code)
+
+    def test_support_and_assistance_require_technicians(self):
+        for inspection_type in ("Soporte", "Asistencia"):
+            self.assert_rejected(type=inspection_type, assigned_technicians=[])
+            self.assert_rejected(type=inspection_type, assigned_technicians=None)
+
+    def test_invalid_or_unknown_technicians_are_rejected(self):
+        self.assert_rejected(type="Soporte", assigned_technicians=["no-es-uuid"])
+        self.assert_rejected(type="Soporte", assigned_technicians="11111111-1111-1111-1111-111111111111")
+        self.assert_rejected(type="Soporte", assigned_technicians=[str(uuid.uuid4())])
+
+    def test_saves_technicians_without_duplicates(self):
+        inspection = create(
+            self.repository,
+            type="Asistencia",
+            assigned_technicians=[str(TECHNICIAN_B), str(TECHNICIAN_A), str(TECHNICIAN_B)],
+        )
+        self.assertEqual([TECHNICIAN_B, TECHNICIAN_A], self.technicians(inspection.id_inspection))
+
+    def test_inspection_ignores_technicians(self):
+        inspection = create(
+            self.repository, type="Inspección", assigned_technicians=[str(TECHNICIAN_A)]
+        )
+        self.assertEqual([], self.technicians(inspection.id_inspection))
+
+    def test_update_replaces_technicians_only_when_sent(self):
+        inspection = create(self.repository, type="Soporte")
+
+        self.update(inspection.id_inspection, title_ticket="Otro")
+        self.assertEqual([TECHNICIAN_A], self.technicians(inspection.id_inspection))
+
+        self.update(inspection.id_inspection, assigned_technicians=[str(TECHNICIAN_B)])
+        self.assertEqual([TECHNICIAN_B], self.technicians(inspection.id_inspection))
+
+        with self.assertRaises(CustomAPIException) as context:
+            self.update(inspection.id_inspection, assigned_technicians=[])
+        self.assertEqual(400, context.exception.status_code)
+        self.assertEqual([TECHNICIAN_B], self.technicians(inspection.id_inspection))
+
+    def test_update_to_inspection_removes_technicians(self):
+        inspection = create(self.repository, type="Soporte")
+        self.update(inspection.id_inspection, type="Inspección")
+        self.assertEqual([], self.technicians(inspection.id_inspection))
+
+    def test_register_technical_returns_staff_and_records_of_assistance(self):
+        assistance = create(
+            self.repository,
+            type="Asistencia",
+            assigned_technicians=[str(TECHNICIAN_A), str(TECHNICIAN_B)],
+        )
+        regular = create(self.repository, type="Inspección")
+        for inspection in (assistance, regular):
+            self.repository.post_ticket_technical(
+                {"inspection_id": inspection.id_inspection, "user": "tecnico"},
+                "i", "e", files=[],
+            )
+        with self.repository.db_telearseg.session_factory() as session:
+            session.add_all([
+                TechnicalRecord(id_record=1, inspection_id=assistance.id_inspection,
+                                resume="Primera visita", status="Completado",
+                                created_by="tecnico_a", created_at=datetime(2026, 11, 1)),
+                TechnicalRecord(id_record=2, inspection_id=assistance.id_inspection,
+                                resume="Segunda visita", status="Pendiente",
+                                created_by="tecnico_b", created_at=datetime(2026, 11, 2)),
+                # Registro de un proyecto: no pertenece a la Asistencia
+                TechnicalRecord(id_record=3, task_id=99, resume="Proyecto"),
+            ])
+            session.flush()
+            session.add_all([
+                TechRecordImage(id_image=1, record_id=2, image_path="records/a.jpg"),
+                TechRecordImage(id_image=2, record_id=2, image_path="records/b.jpg"),
+                TechRecordImage(id_image=3, record_id=2, image_path=None),
+                TechRecordImage(id_image=4, record_id=3, image_path="records/proyecto.jpg"),
+            ])
+            session.commit()
+
+        rows = self.repository.get_ticket_technical({}, "i", "e")
+        result = InternalManagementUseCase(
+            SimpleNamespace(get_ticket_technical=lambda *args: rows)
+        ).get_ticket_technical({}, {}, "i", "e")
+        by_inspection = {row["id_inspection"]: row for row in result}
+
+        assistance_row = by_inspection[assistance.id_inspection]
+        self.assertEqual(
+            [
+                {"id_user": str(TECHNICIAN_A), "user": "tecnico_a", "fullname": "Técnico A"},
+                {"id_user": str(TECHNICIAN_B), "user": "tecnico_b", "fullname": "Técnico B"},
+            ],
+            assistance_row["assigned_technicians"],
+        )
+        # Más reciente primero, como en Proyectos técnicos
+        self.assertEqual(
+            [2, 1], [record["id_record"] for record in assistance_row["record_technical"]]
+        )
+        self.assertEqual("Segunda visita", assistance_row["record_technical"][0]["resume"])
+        # Imágenes para el detalle del registro (sin rutas NULL)
+        self.assertEqual(
+            [["records/a.jpg", "records/b.jpg"], []],
+            [record["images"] for record in assistance_row["record_technical"]],
+        )
+
+        regular_row = by_inspection[regular.id_inspection]
+        self.assertEqual([], regular_row["assigned_technicians"])
+        self.assertEqual([], regular_row["record_technical"])
+
+    def test_technical_filter_matches_responsible_or_assigned_staff(self):
+        responsible = create(self.repository, type="Inspección", responsible_id=TECHNICIAN_B)
+        assigned = create(
+            self.repository, type="Soporte", assigned_technicians=[str(TECHNICIAN_A), str(TECHNICIAN_B)]
+        )
+        other = create(self.repository, type="Asistencia", assigned_technicians=[str(TECHNICIAN_A)])
+
+        with self.repository.db_telearseg.session_factory() as session:
+            ids = session.execute(
+                select(InspectionTechnical.id_inspection)
+                .where(InternalManagementRepository._technical_condition(TECHNICIAN_B))
+                .order_by(InspectionTechnical.id_inspection)
+            ).scalars().all()
+
+        self.assertEqual([responsible.id_inspection, assigned.id_inspection], ids)
+        self.assertNotIn(other.id_inspection, ids)
+
+    def test_technical_filter_is_applied_to_inspection_query(self):
+        sql = inspection_sql({"technical": TECHNICIAN_A})
+
+        self.assertIn("inspection_technical.responsible_id =", sql)
+        self.assertIn("inspection_technical_assignments.user_id =", sql)
+
+    def test_technical_filter_must_be_uuid(self):
+        use_case = InternalManagementUseCase(SimpleNamespace())
+
+        self.assertEqual(
+            TECHNICIAN_A,
+            use_case._build_ticket_filters({"technical": str(TECHNICIAN_A)})["technical"],
+        )
+        self.assertIsNone(use_case._build_ticket_filters({})["technical"])
+        with self.assertRaises(CustomAPIException) as context:
+            use_case._build_ticket_filters({"technical": "dmales"})
+        self.assertEqual(400, context.exception.status_code)
 
 
 if __name__ == "__main__":

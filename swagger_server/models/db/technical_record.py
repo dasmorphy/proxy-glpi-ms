@@ -27,6 +27,13 @@ class TechnicalRecord(Base):
         ForeignKey("technical.task_technical.id_task")
     )
 
+    # Registro hecho sobre un Soporte / Asistencia (sin proyecto); NULL en los
+    # registros de proyecto
+    inspection_id = Column(
+        Integer,
+        ForeignKey("internal_management.inspection_technical.id_inspection")
+    )
+
     client_id = Column(
         Integer,
         ForeignKey("technical.clients.id_client")

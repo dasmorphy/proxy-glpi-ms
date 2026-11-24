@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import re
+import uuid
 
 from swagger_server.exception.custom_error_exception import CustomAPIException
 from swagger_server.models.db.inspection_technical import InspectionTechnical
@@ -116,9 +117,30 @@ class InternalManagementUseCase:
                     }
                     for material in materials
                 ],
+                **self._serialize_support_staff(staff),
             }
-            for management, ticket, materials in rows
+            for management, ticket, materials, staff in rows
         ]
+
+    @staticmethod
+    def _serialize_support_staff(staff):
+        """Personal técnico y registros técnicos de un Soporte / Asistencia
+        (record_technical con la misma forma que en Proyectos técnicos).
+        Vacíos para una Inspección."""
+        staff = staff or {}
+        return {
+            "assigned_technicians": [
+                {
+                    "id_user": str(technician["id_user"]),
+                    "user": technician["user"],
+                    "fullname": technician["fullname"],
+                }
+                for technician in staff.get("technicians", [])
+            ],
+            # Registros del flujo anterior (technical_record) y registros de campo
+            # de /register-technical; "source" indica de cuál viene cada uno
+            "record_technical": staff.get("records", []),
+        }
         
 
     def get_inspection_technical(self, headers, params, internal, external):
@@ -167,8 +189,9 @@ class InternalManagementUseCase:
                     }
                     for document in documents
                 ],
+                **self._serialize_support_staff(staff),
             }
-            for inspection, project_id, commercial_status_id, commercial_status, technical_id, technical_description, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, sales_user_fullname, documents in rows
+            for inspection, project_id, commercial_status_id, commercial_status, technical_id, technical_description, identity, company_name, client_company_id, sale_quote_id, sale_quote_total, sales_user_fullname, documents, staff in rows
         ]
 
     def get_inspection_document(self, id_document, internal, external):
@@ -209,6 +232,8 @@ class InternalManagementUseCase:
             "ticket_id": self._optional_int(params.get("ticket_id"), "ticket_id"),
             "responsible": params.get("responsible"),
             "sales_user": params.get("sales_user", "").strip() or None,
+            # Responsable o personal técnico (GET /inspection)
+            "technical": self._optional_uuid(params.get("technical"), "technical"),
             "pending_technical": params.get("pending_technical"),
             "pending_commercial": params.get("pending_commercial"),
             "ready_for_project": params.get("ready_for_project"),
@@ -237,6 +262,18 @@ class InternalManagementUseCase:
         except (TypeError, ValueError):
             raise CustomAPIException(
                 f"El parámetro {field_name} debe ser un número entero",
+                400,
+            )
+
+    @staticmethod
+    def _optional_uuid(value, field_name):
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            return uuid.UUID(str(value).strip())
+        except (TypeError, ValueError):
+            raise CustomAPIException(
+                f"El parámetro {field_name} debe ser un UUID válido",
                 400,
             )
 

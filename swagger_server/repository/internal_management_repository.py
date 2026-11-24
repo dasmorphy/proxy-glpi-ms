@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import uuid
 
 from loguru import logger
 from sqlalchemy import and_, delete, exists, func, or_, select, update
@@ -27,11 +28,16 @@ from swagger_server.models.db.sale_quotation import SaleQuotation
 from swagger_server.models.db.sale_quotation_item import SaleQuotationItem
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.task_technical_assignments import TaskTechnicalAssignment
+from swagger_server.models.db.tech_record_image import TechRecordImage
+from swagger_server.models.db.tech_staff_record import TechStaffRecord
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_record import TechnicalRecord
 from swagger_server.models.db.technical_ticket_management import TechnicalTicketManagement
 from swagger_server.models.db.users import Users
 from swagger_server.models.db.inspection_technical import InspectionTechnical
+from swagger_server.models.db.inspection_technical_assignments import (
+    InspectionTechnicalAssignment,
+)
 from swagger_server.resources.databases.postgresql import PostgreSQLClient
 from swagger_server.utils.inspection_documents import (
     clean_files,
@@ -408,6 +414,7 @@ class InternalManagementRepository:
                 )
                 .where(
                     TechnicalTicketManagement.inspection_id == inspection_id,
+                    TechnicalTicketManagement.is_field_record.is_(False),
                     MaterialTechTicket.id_material.in_(technical_ids),
                 )
             ).scalars().all()
@@ -505,7 +512,9 @@ class InternalManagementRepository:
         }
 
     @staticmethod
-    def _save_inspection_documents(session, inspection_id, files, saved_paths):
+    def _save_inspection_documents(
+        session, inspection_id, files, saved_paths, management_technical_id=None
+    ):
         """Escribe los archivos en disco y registra cada ruta en inspection_documents.
 
         Las rutas escritas se agregan a saved_paths para poder eliminarlas si la
@@ -517,6 +526,7 @@ class InternalManagementRepository:
             session.add(
                 InspectionDocuments(
                     inspection_id=inspection_id,
+                    management_technical_id=management_technical_id,
                     document_path=document_path,
                     name_document=file.filename,
                     type_document=document_mimetype(file.filename, file.mimetype),
@@ -562,10 +572,18 @@ class InternalManagementRepository:
                     ubication_name=body.get('ubication_name'),
                 )
                 self._validate_support_dates(new_inspection)
+                technicians = self._parse_technicians(body.get("assigned_technicians"))
 
 
                 session.add(new_inspection)
                 session.flush()
+
+                # Personal técnico: solo Soporte / Asistencia (la Inspección lo
+                # asigna al crear el proyecto)
+                if self._is_support(new_inspection):
+                    self._save_technicians(
+                        session, new_inspection.id_inspection, technicians, body.get("user")
+                    )
 
                 if inspection_type == "Asistencia":
                     new_inspection.code = self.generate_code_assistance(
@@ -661,6 +679,17 @@ class InternalManagementRepository:
                 self._validate_support_dates(inspection)
                 self._set_updated_by(body, inspection)
 
+                # Personal técnico: si llega se reemplaza; al pasar a Inspección se quita
+                if not self._is_support(inspection):
+                    self._delete_technicians(session, inspection.id_inspection)
+                elif "assigned_technicians" in body:
+                    self._save_technicians(
+                        session,
+                        inspection.id_inspection,
+                        self._parse_technicians(body["assigned_technicians"]),
+                        body.get("user"),
+                    )
+
                 if (
                     body.get("status") == "Listo para cotizar"
                     and inspection.management_area == "Técnica"
@@ -706,26 +735,37 @@ class InternalManagementRepository:
 
                 if inspection is None:
                     raise CustomAPIException("Inspección no encontrado", 404)
-                self._ensure_not_support(inspection)
 
-                already_registered = session.execute(
-                    select(
-                        exists().where(
-                            TechnicalTicketManagement.inspection_id
-                            == inspection.id_inspection
+                # Registro de campo (app): varios por Soporte / Asistencia.
+                # Gestión técnica (web): una por inspección y sigue el flujo.
+                is_field_record = bool(body.get('field_record'))
+                if is_field_record:
+                    self._ensure_field_record_allowed(inspection)
+                else:
+                    self._ensure_not_support(inspection)
+
+                    already_registered = session.execute(
+                        select(
+                            exists().where(
+                                TechnicalTicketManagement.inspection_id
+                                == inspection.id_inspection,
+                                TechnicalTicketManagement.is_field_record.is_(False),
+                            )
                         )
-                    )
-                ).scalar()
+                    ).scalar()
 
-                if already_registered:
-                    raise CustomAPIException(
-                        "La inspección ya tiene un registro técnico asociado", 409
-                    )
+                    if already_registered:
+                        raise CustomAPIException(
+                            "La inspección ya tiene un registro técnico asociado", 409
+                        )
 
                 new_register = TechnicalTicketManagement(
                     inspection_id=inspection.id_inspection,
                     description=body.get('description'),
-                    status="Pendiente aprobación",
+                    status=self.TECHNICAL_STATUS_PENDING_APPROVAL,
+                    is_field_record=is_field_record,
+                    vehicle=body.get('vehicle') if is_field_record else None,
+                    record_status=body.get('record_status') if is_field_record else None,
                     created_by=body.get('user'),
                     updated_by=body.get('user'),
                 )
@@ -740,8 +780,17 @@ class InternalManagementRepository:
                     session, new_register, body.get('materials') or [], body.get('user')
                 )
 
+                if is_field_record and "technical_staff" in body:
+                    self._save_field_staff(
+                        session, new_register, body.get('technical_staff')
+                    )
+
                 self._save_inspection_documents(
-                    session, inspection.id_inspection, files, saved_paths
+                    session,
+                    inspection.id_inspection,
+                    files,
+                    saved_paths,
+                    new_register.id_management_technical if is_field_record else None,
                 )
                 session.commit()
 
@@ -756,6 +805,52 @@ class InternalManagementRepository:
 
             finally:
                 session.close()
+
+    @classmethod
+    def _ensure_field_record_allowed(cls, inspection):
+        """Los registros de campo solo aplican a Soportes / Asistencias que siguen
+        en Técnica y aún no están aprobados."""
+        if not cls._is_support(inspection):
+            raise CustomAPIException(
+                "Solo los Soportes y Asistencias admiten registros técnicos de campo", 400
+            )
+        if inspection.approve_support:
+            raise CustomAPIException(
+                "El caso ya está aprobado; no se pueden agregar registros técnicos", 400
+            )
+        if inspection.management_area not in (None, "Técnica"):
+            raise CustomAPIException(
+                f"El caso ya está en {inspection.management_area}; "
+                "no se pueden agregar registros técnicos",
+                400,
+            )
+
+    @staticmethod
+    def _save_field_staff(session, management, staff_ids):
+        """Reemplaza el personal (technical.tech_staff_record) del registro de campo."""
+        try:
+            user_ids = list(dict.fromkeys(
+                uuid.UUID(str(user_id)) for user_id in staff_ids or []
+            ))
+        except ValueError:
+            raise CustomAPIException(
+                "technical_staff debe ser una lista de id_user válidos", 400
+            )
+
+        session.execute(
+            delete(TechStaffRecord).where(
+                TechStaffRecord.management_technical_id
+                == management.id_management_technical
+            )
+        )
+        for user_id in user_ids:
+            session.add(
+                TechStaffRecord(
+                    inspection_id=management.inspection_id,
+                    management_technical_id=management.id_management_technical,
+                    user_tech_id=user_id,
+                )
+            )
 
 
     def get_ticket_technical(self, filters, internal, external):
@@ -777,6 +872,9 @@ class InternalManagementRepository:
                     filters,
                     TechnicalTicketManagement,
                 )
+                # Los registros de campo de la app se consultan desde
+                # technical-control-ms (GET /technical_record)
+                conditions.append(TechnicalTicketManagement.is_field_record.is_(False))
                 if filters.get("management_status"):
                     conditions.append(
                         InspectionTechnical.management_status
@@ -844,11 +942,14 @@ class InternalManagementRepository:
                             material.tech_ticket, []
                         ).append(material)
 
+                staff = self._support_staff(session, [ticket for _, ticket in rows])
+
                 return [
                     (
                         management,
                         ticket,
                         materials_by_ticket.get(management.id_management_technical, []),
+                        staff.get(ticket.id_inspection),
                     )
                     for management, ticket in rows
                 ]
@@ -1121,7 +1222,10 @@ class InternalManagementRepository:
                         TechnicalEquipment.id_equipment
                         == MaterialTechTicket.material_id,
                     )
-                    .where(TechnicalTicketManagement.inspection_id == inspection_id)
+                    .where(
+                        TechnicalTicketManagement.inspection_id == inspection_id,
+                        TechnicalTicketManagement.is_field_record.is_(False),
+                    )
                     .order_by(MaterialTechTicket.id_material)
                 )
 
@@ -1467,6 +1571,9 @@ class InternalManagementRepository:
                         TechnicalTicketManagement.id_management_technical
                         == body.get("id_management_technical")
                     )
+                else:
+                    # Sin id se edita la gestión técnica, nunca un registro de campo
+                    management_stmt = management_stmt.where(TechnicalTicketManagement.is_field_record.is_(False))
                 management = session.execute(
                     management_stmt.order_by(
                         TechnicalTicketManagement.id_management_technical.desc()
@@ -1475,6 +1582,13 @@ class InternalManagementRepository:
 
                 if management is None:
                     raise CustomAPIException("Gestión técnica no encontrada", 404)
+
+                if management.is_field_record:
+                    self._update_field_record(
+                        session, ticket, management, body, files, saved_paths
+                    )
+                    session.commit()
+                    return
 
                 was_returned = management.status == self.TECHNICAL_STATUS_RETURNED
                 self._apply_fields(
@@ -1527,6 +1641,35 @@ class InternalManagementRepository:
                 )
             finally:
                 session.close()
+
+    def _update_field_record(self, session, ticket, management, body, files, saved_paths):
+        """Actualiza un registro de campo de la app (no toca el flujo)."""
+        self._ensure_field_record_allowed(ticket)
+        self._apply_fields(
+            management,
+            body,
+            {
+                "description": "description",
+                "vehicle": "vehicle",
+                "record_status": "record_status",
+            },
+        )
+        self._set_updated_by(body, management)
+
+        if "materials" in body:
+            self._save_technical_materials(
+                session, management, body.get("materials") or [], body.get("user")
+            )
+        if "technical_staff" in body:
+            self._save_field_staff(session, management, body.get("technical_staff"))
+
+        self._save_inspection_documents(
+            session,
+            ticket.id_inspection,
+            files,
+            saved_paths,
+            management.id_management_technical,
+        )
 
     def update_ticket_commercial(self, body, internal, external, files=None):
         """Los documentos recibidos se agregan a los de la inspección; los
@@ -1744,22 +1887,26 @@ class InternalManagementRepository:
         with self.db_telearseg.session_factory() as session:
             try:
 
-                register_technical = session.execute(
-                    select(TechnicalTicketManagement).where(
-                        TechnicalTicketManagement.inspection_id == body.get("id_inspection")
-                    )
-                ).scalar_one_or_none()
-        
-                if register_technical is None:
-                    raise CustomAPIException("Registro técnico no encontrado", 404)
-
-                register_technical.status = "Aprobado"
-                register_technical.updated_by = body.get("user")
-
                 self._validate_update_body(body, "id_inspection")
                 self._validate_update_body(body, "user")
                 inspection = self._get_inspection(session, body.get("id_inspection"))
                 self._ensure_not_support(inspection)
+
+                register_technical = session.execute(
+                    select(TechnicalTicketManagement)
+                    .where(
+                        TechnicalTicketManagement.inspection_id == inspection.id_inspection,
+                        TechnicalTicketManagement.is_field_record.is_(False),
+                    )
+                    .order_by(TechnicalTicketManagement.id_management_technical.desc())
+                ).scalars().first()
+
+                # La Asistencia se puede aprobar aunque no tenga registros
+                if register_technical is None and not self._is_assistance(inspection):
+                    raise CustomAPIException("Registro técnico no encontrado", 404)
+
+                # Se aprueban la gestión y los registros de campo del caso
+                self._approve_technical_records(session, inspection, body.get("user"))
 
                 inspection.status = "Listo para cotizar"
                 inspection.updated_by = body.get("user")
@@ -1794,6 +1941,15 @@ class InternalManagementRepository:
             finally:
                 session.close()
 
+    @staticmethod
+    def _approve_technical_records(session, inspection, user):
+        """Marca como Aprobado la gestión y los registros de campo del caso."""
+        session.execute(
+            update(TechnicalTicketManagement)
+            .where(TechnicalTicketManagement.inspection_id == inspection.id_inspection)
+            .values(status="Aprobado", updated_by=user)
+        )
+
     def approve_support(self, body, internal, external):
         """Marca un Soporte como aprobado (approve_support = true); se queda en Técnica.
         La Asistencia sigue el flujo normal y se aprueba con su registro técnico
@@ -1819,6 +1975,7 @@ class InternalManagementRepository:
 
                 inspection.approve_support = True
                 inspection.updated_by = body.get("user")
+                self._approve_technical_records(session, inspection, body.get("user"))
                 session.commit()
             except Exception as exception:
                 session.rollback()
@@ -2103,7 +2260,10 @@ class InternalManagementRepository:
 
                 technical = session.execute(
                     select(TechnicalTicketManagement)
-                    .where(TechnicalTicketManagement.inspection_id == inspection.id_inspection)
+                    .where(
+                        TechnicalTicketManagement.inspection_id == inspection.id_inspection,
+                        TechnicalTicketManagement.is_field_record.is_(False),
+                    )
                     .order_by(TechnicalTicketManagement.id_management_technical.desc())
                 ).scalars().first()
                 if technical is None:
@@ -2329,8 +2489,12 @@ class InternalManagementRepository:
                     TaskTechnical,
                     TaskTechnical.inspection_id == InspectionTechnical.id_inspection
                 ).outerjoin(
+                    # Solo la gestión técnica: los registros de campo duplicarían filas
                     TechnicalTicketManagement,
-                    TechnicalTicketManagement.inspection_id == InspectionTechnical.id_inspection
+                    and_(
+                        TechnicalTicketManagement.inspection_id == InspectionTechnical.id_inspection,
+                        TechnicalTicketManagement.is_field_record.is_(False),
+                    ),
                 ).outerjoin(
                     # inspección -> cliente -> empresa del cliente (RUC)
                     Client,
@@ -2371,6 +2535,9 @@ class InternalManagementRepository:
                     conditions.append(InspectionTechnical.responsible_id == filters["responsible_id"])
                 if filters.get("sales_user"):
                     conditions.append(InspectionTechnical.sales_user == filters["sales_user"])
+                if filters.get("technical"):
+                    # Responsable o personal técnico asignado
+                    conditions.append(self._technical_condition(filters["technical"]))
                 if filters.get("type"):
                     conditions.append(self._type_condition(filters["type"]))
                 if filters.get("pending_technical") == 'true':
@@ -2437,8 +2604,14 @@ class InternalManagementRepository:
                             document.inspection_id, []
                         ).append(document)
 
+                staff = self._support_staff(session, [row[0] for row in rows])
+
                 return [
-                    (*row, documents_by_inspection.get(row[0].id_inspection, []))
+                    (
+                        *row,
+                        documents_by_inspection.get(row[0].id_inspection, []),
+                        staff.get(row[0].id_inspection),
+                    )
                     for row in rows
                 ]
 
@@ -2496,7 +2669,8 @@ class InternalManagementRepository:
                         and_(
                             ~exists().where(
                                 TechnicalTicketManagement.inspection_id
-                                == InspectionTechnical.id_inspection
+                                == InspectionTechnical.id_inspection,
+                                TechnicalTicketManagement.is_field_record.is_(False),
                             ),
                             # Asistencias antiguas: pasaron a Comercial sin registro
                             ~self._legacy_approved_assistance(),
@@ -2505,6 +2679,7 @@ class InternalManagementRepository:
                         exists().where(
                             TechnicalTicketManagement.inspection_id
                             == InspectionTechnical.id_inspection,
+                            TechnicalTicketManagement.is_field_record.is_(False),
                             TechnicalTicketManagement.status
                             == self.TECHNICAL_STATUS_RETURNED,
                         ),
@@ -2885,6 +3060,243 @@ class InternalManagementRepository:
                 "La fecha fin no puede ser anterior a la fecha inicio", 400
             )
 
+    @staticmethod
+    def _parse_technicians(value):
+        """assigned_technicians: lista de id_user (UUID), sin repetidos y en orden."""
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise CustomAPIException(
+                "El campo assigned_technicians debe ser una lista de ids de usuario", 400
+            )
+        technicians = []
+        for raw in value:
+            try:
+                user_id = raw if isinstance(raw, uuid.UUID) else uuid.UUID(str(raw))
+            except (TypeError, ValueError, AttributeError):
+                raise CustomAPIException(
+                    f"El id de usuario {raw} de assigned_technicians no es válido", 400
+                )
+            if user_id not in technicians:
+                technicians.append(user_id)
+        return technicians
+
+    @staticmethod
+    def _find_users(session, user_ids):
+        """{id_user: (user, fullname)} de public.users."""
+        if not user_ids:
+            return {}
+        return {
+            id_user: (user, (attributes or {}).get("fullname"))
+            for id_user, user, attributes in session.execute(
+                select(Users.id_user, Users.user, Users.attributes).where(
+                    Users.id_user.in_(user_ids)
+                )
+            ).all()
+        }
+
+    def _save_technicians(self, session, inspection_id, technicians, user):
+        """Reemplaza el personal técnico de un Soporte / Asistencia."""
+        if not technicians:
+            raise CustomAPIException(
+                "El personal técnico (assigned_technicians) es obligatorio "
+                "para Soporte y Asistencia",
+                400,
+            )
+        found = self._find_users(session, technicians)
+        missing = [str(user_id) for user_id in technicians if user_id not in found]
+        if missing:
+            raise CustomAPIException(
+                f"Usuarios no encontrados en assigned_technicians: {', '.join(missing)}",
+                400,
+            )
+        self._delete_technicians(session, inspection_id)
+        session.add_all([
+            InspectionTechnicalAssignment(
+                inspection_id=inspection_id,
+                user_id=user_id,
+                created_by=user,
+            )
+            for user_id in technicians
+        ])
+
+    @staticmethod
+    def _delete_technicians(session, inspection_id):
+        session.execute(
+            delete(InspectionTechnicalAssignment).where(
+                InspectionTechnicalAssignment.inspection_id == inspection_id
+            )
+        )
+
+    def _support_staff(self, session, inspections):
+        """Personal técnico y registros técnicos (technical_record) de los
+        Soportes / Asistencias: {id_inspection: {"technicians", "records"}}.
+        Las Inspecciones no tienen (usan el proyecto)."""
+        ids = [
+            inspection.id_inspection
+            for inspection in inspections
+            if self._is_support(inspection)
+        ]
+        if not ids:
+            return {}
+        staff = {inspection_id: {"technicians": [], "records": []} for inspection_id in ids}
+
+        assignments = session.execute(
+            select(InspectionTechnicalAssignment)
+            .where(InspectionTechnicalAssignment.inspection_id.in_(ids))
+            .order_by(InspectionTechnicalAssignment.id_assignment)
+        ).scalars().all()
+        users = self._find_users(
+            session, list({assignment.user_id for assignment in assignments})
+        )
+        for assignment in assignments:
+            user, fullname = users.get(assignment.user_id, (None, None))
+            staff[assignment.inspection_id]["technicians"].append({
+                "id_user": assignment.user_id,
+                "user": user,
+                "fullname": fullname,
+            })
+
+        records = session.execute(
+            select(TechnicalRecord)
+            .where(TechnicalRecord.inspection_id.in_(ids))
+            .order_by(TechnicalRecord.created_at.desc(), TechnicalRecord.id_record.desc())
+        ).scalars().all()
+        images = {}
+        if records:
+            for record_id, image_path in session.execute(
+                select(TechRecordImage.record_id, TechRecordImage.image_path)
+                .where(
+                    TechRecordImage.record_id.in_([record.id_record for record in records]),
+                    TechRecordImage.image_path.is_not(None),
+                )
+                .order_by(TechRecordImage.id_image)
+            ).all():
+                images.setdefault(record_id, []).append(image_path)
+        for record in records:
+            staff[record.inspection_id]["records"].append({
+                # Flujo anterior: technical-control-ms (technical.technical_record)
+                "source": "technical_record",
+                "id_record": record.id_record,
+                "id_management_technical": None,
+                "inspection_id": record.inspection_id,
+                "task_id": record.task_id,
+                "client_id": record.client_id,
+                "location_id": record.location_id,
+                "resume": record.resume,
+                "vehicle": record.vehicle,
+                "status": record.status,
+                "created_by": record.created_by,
+                "updated_by": record.updated_by,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+                # Rutas relativas, como en Proyectos técnicos (se sirven desde apiTicket)
+                "images": images.get(record.id_record, []),
+            })
+
+        staff = self._add_field_records(session, ids, staff)
+        for data in staff.values():
+            data["records"].sort(
+                key=lambda item: (item["created_at"] is not None, item["created_at"]),
+                reverse=True,
+            )
+        return staff
+
+    def _add_field_records(self, session, inspection_ids, staff):
+        """Registros de campo de la app (/register-technical con
+        is_field_record = true) con su personal, materiales e imágenes
+        (inspection_documents ligados al registro)."""
+        records = session.execute(
+            select(TechnicalTicketManagement).where(
+                TechnicalTicketManagement.inspection_id.in_(inspection_ids),
+                TechnicalTicketManagement.is_field_record.is_(True),
+            )
+        ).scalars().all()
+        if not records:
+            return staff
+
+        record_ids = [record.id_management_technical for record in records]
+
+        documents = {}
+        for document in session.execute(
+            select(InspectionDocuments)
+            .where(InspectionDocuments.management_technical_id.in_(record_ids))
+            .order_by(InspectionDocuments.id_document)
+        ).scalars().all():
+            documents.setdefault(document.management_technical_id, []).append(
+                document.document_path
+            )
+
+        staff_rows = session.execute(
+            select(TechStaffRecord)
+            .where(TechStaffRecord.management_technical_id.in_(record_ids))
+            .order_by(TechStaffRecord.id_staff_record)
+        ).scalars().all()
+        users = self._find_users(
+            session, list({row.user_tech_id for row in staff_rows if row.user_tech_id})
+        )
+        record_staff = {}
+        for row in staff_rows:
+            user, fullname = users.get(row.user_tech_id, (None, None))
+            record_staff.setdefault(row.management_technical_id, []).append({
+                "user_tech_id": str(row.user_tech_id) if row.user_tech_id else None,
+                "user": user,
+                "name": fullname,
+            })
+
+        materials = {}
+        for material, equipment in session.execute(
+            select(MaterialTechTicket, TechnicalEquipment)
+            .outerjoin(
+                TechnicalEquipment,
+                TechnicalEquipment.id_equipment == MaterialTechTicket.material_id,
+            )
+            .where(MaterialTechTicket.tech_ticket.in_(record_ids))
+            .order_by(MaterialTechTicket.id_material)
+        ).all():
+            materials.setdefault(material.tech_ticket, []).append({
+                "id_material": material.id_material,
+                "id_equipment": material.material_id,
+                "material": equipment.product if equipment else material.material_description,
+                "quantity": material.quantity,
+            })
+
+        for record in records:
+            staff[record.inspection_id]["records"].append({
+                # Flujo nuevo: proxy-glpi-ms (/register-technical)
+                "source": "register_technical",
+                "id_record": None,
+                "id_management_technical": record.id_management_technical,
+                "code_management": record.code_management,
+                "inspection_id": record.inspection_id,
+                "task_id": None,
+                "resume": record.description,
+                "vehicle": record.vehicle,
+                "status": record.record_status,
+                "approval_status": record.status,
+                "created_by": record.created_by,
+                "updated_by": record.updated_by,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+                # Rutas de inspection_documents (se sirven desde TECHNICAL_BASE_URL)
+                "images": documents.get(record.id_management_technical, []),
+                "technical_staff": record_staff.get(record.id_management_technical, []),
+                "materials": materials.get(record.id_management_technical, []),
+            })
+        return staff
+
+    @staticmethod
+    def _technical_condition(user_id):
+        """Inspecciones donde el usuario es el responsable o parte del personal
+        técnico asignado (Soporte / Asistencia)."""
+        return or_(
+            InspectionTechnical.responsible_id == user_id,
+            exists().where(
+                InspectionTechnicalAssignment.inspection_id == InspectionTechnical.id_inspection,
+                InspectionTechnicalAssignment.user_id == user_id,
+            ),
+        )
+
     @classmethod
     def _type_condition(cls, types):
         """Filtra por uno o varios tipos (ej: ["Soporte", "Asistencia"]).
@@ -3104,7 +3516,8 @@ class InternalManagementRepository:
         return session.execute(
             select(
                 exists().where(
-                    TechnicalTicketManagement.inspection_id == inspection.id_inspection
+                    TechnicalTicketManagement.inspection_id == inspection.id_inspection,
+                    TechnicalTicketManagement.is_field_record.is_(False),
                 )
                 | exists().where(
                     CommercialTicketManagement.ticket_id == inspection.id_inspection
