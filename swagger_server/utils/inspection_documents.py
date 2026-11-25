@@ -16,6 +16,10 @@ ALLOWED_EXTENSIONS = {
     "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt",
 }
 
+# Los registros técnicos de campo solo llevan imágenes (se muestran en la galería
+# de la app y de la web)
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+
 
 def get_documents_folder():
     return access()["STORAGE"]["INSPECTION_DOCUMENTS"]
@@ -55,6 +59,20 @@ def validate_documents(files):
 def _document_filename(file, inspection_id):
     original_name = secure_filename(file.filename) or f"documento.{get_extension(file.filename)}"
     return f"{inspection_id}_{uuid.uuid4().hex[:12]}_{original_name}"
+
+
+def validate_images(files):
+    invalid = [
+        file.filename
+        for file in files
+        if get_extension(file.filename) not in IMAGE_EXTENSIONS
+    ]
+    if invalid:
+        raise CustomAPIException(
+            f"Los registros técnicos solo admiten imágenes: {', '.join(invalid)}. "
+            f"Extensiones permitidas: {', '.join(sorted(IMAGE_EXTENSIONS))}",
+            400,
+        )
 
 
 def save_document(file, inspection_id):

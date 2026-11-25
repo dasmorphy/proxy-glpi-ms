@@ -655,25 +655,17 @@ class TestSupportTechnicians(unittest.TestCase):
                 {"inspection_id": inspection.id_inspection, "user": "tecnico"},
                 "i", "e", files=[],
             )
+        # technical_record ya no se consulta para Soportes / Asistencias
         with self.repository.db_telearseg.session_factory() as session:
-            session.add_all([
-                TechnicalRecord(id_record=1, inspection_id=assistance.id_inspection,
-                                resume="Primera visita", status="Completado",
-                                created_by="tecnico_a", created_at=datetime(2026, 11, 1)),
-                TechnicalRecord(id_record=2, inspection_id=assistance.id_inspection,
-                                resume="Segunda visita", status="Pendiente",
-                                created_by="tecnico_b", created_at=datetime(2026, 11, 2)),
-                # Registro de un proyecto: no pertenece a la Asistencia
-                TechnicalRecord(id_record=3, task_id=99, resume="Proyecto"),
-            ])
-            session.flush()
-            session.add_all([
-                TechRecordImage(id_image=1, record_id=2, image_path="records/a.jpg"),
-                TechRecordImage(id_image=2, record_id=2, image_path="records/b.jpg"),
-                TechRecordImage(id_image=3, record_id=2, image_path=None),
-                TechRecordImage(id_image=4, record_id=3, image_path="records/proyecto.jpg"),
-            ])
+            session.add(TechnicalRecord(id_record=1, inspection_id=assistance.id_inspection,
+                                        resume="Flujo anterior", created_at=datetime(2026, 11, 1)))
             session.commit()
+        for resume in ("Primera visita", "Segunda visita"):
+            self.repository.post_ticket_technical(
+                {"inspection_id": assistance.id_inspection, "field_record": True,
+                 "user": "tecnico", "description": resume},
+                "i", "e", files=[],
+            )
 
         rows = self.repository.get_ticket_technical({}, "i", "e")
         result = InternalManagementUseCase(
@@ -689,16 +681,12 @@ class TestSupportTechnicians(unittest.TestCase):
             ],
             assistance_row["assigned_technicians"],
         )
-        # Más reciente primero, como en Proyectos técnicos
+        # Solo registros de campo (/register-technical), sin la gestión web
+        records = assistance_row["record_technical"]
         self.assertEqual(
-            [2, 1], [record["id_record"] for record in assistance_row["record_technical"]]
+            {"Primera visita", "Segunda visita"}, {record["resume"] for record in records}
         )
-        self.assertEqual("Segunda visita", assistance_row["record_technical"][0]["resume"])
-        # Imágenes para el detalle del registro (sin rutas NULL)
-        self.assertEqual(
-            [["records/a.jpg", "records/b.jpg"], []],
-            [record["images"] for record in assistance_row["record_technical"]],
-        )
+        self.assertTrue(all(record["source"] == "register_technical" for record in records))
 
         regular_row = by_inspection[regular.id_inspection]
         self.assertEqual([], regular_row["assigned_technicians"])

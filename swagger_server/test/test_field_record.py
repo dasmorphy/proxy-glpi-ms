@@ -264,6 +264,19 @@ class TestFieldRecord(unittest.TestCase):
                 resolve_document_path(document.document_path),
             )
 
+    def test_field_record_rejects_non_image_files(self):
+        inspection = create(self.repository, type="Soporte")
+        pdf = FileStorage(io.BytesIO(b"pdf"), filename="informe.pdf", content_type="application/pdf")
+
+        with self.assertRaises(CustomAPIException) as context:
+            self.repository.post_ticket_technical(
+                {"inspection_id": inspection.id_inspection, "field_record": True, "user": "tecnico"},
+                "i", "e", files=[pdf],
+            )
+
+        self.assertEqual(400, context.exception.status_code)
+        self.assertEqual([], self.managements(inspection))
+
 
 if __name__ == "__main__":
     unittest.main()

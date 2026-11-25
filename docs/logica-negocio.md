@@ -304,6 +304,11 @@ ticket.
   carpeta en disco, así que `GET /inspection-documents/{id}` también las sirve.
   El contenedor necesita el volumen `/var/www/uploads/technical` con permiso de
   escritura (ver `docker-compose.yml`).
+- Un registro de campo solo admite imágenes (`validate_images`,
+  `IMAGE_EXTENSIONS`: png, jpg, jpeg, gif, webp, bmp) al crearlo o editarlo;
+  otro tipo de archivo → 400. La web las sube al editar el registro
+  (`/editar-registro-tecnico/:inspection_id/:id_management_technical`) y se
+  agregan a las que ya tiene.
 
 ### Front (pw-tickets)
 
@@ -410,22 +415,19 @@ proyecto. Una Inspección lo asigna al crear el proyecto.
     no llega, se conserva. Así los Soportes / Asistencias anteriores a este cambio
     (sin personal) se siguen editando. Al pasar a Inspección se elimina.
   - Un id que no es UUID o no existe en `public.users` → 400.
-- `technical.technical_record.inspection_id` (nullable): registro técnico hecho
-  sobre un Soporte / Asistencia con el **flujo anterior** (technical-control-ms).
-  Los de proyecto lo dejan en `NULL`. Solo se lee: los registros nuevos van a
-  `/register-technical` (ver "Registros técnicos de campo").
+- `technical.technical_record` queda solo para Proyectos técnicos. Los registros
+  de Soportes / Asistencias se escriben con `/register-technical` y se leen con
+  `GET /inspection` (ver "Registros técnicos de campo"); los pocos registros
+  antiguos de `technical_record` con `inspection_id` ya no se consultan.
 - `GET /inspection` y `GET /register-technical` (`_support_staff`) devuelven en
   cada Soporte / Asistencia:
   - `assigned_technicians`: `[{id_user, user, fullname}]`.
-  - `record_technical`: los registros de los dos flujos, más recientes primero.
-    `source` indica el origen:
-    - `technical_record` (anterior): `id_record`, `resume`, `vehicle`, `status`,
-      `created_by`, `created_at`, … e `images` (rutas de
-      `technical.tech_record_image`, modelo de solo lectura `TechRecordImage`).
-    - `register_technical` (nuevo, `_add_field_records`): `id_management_technical`,
-      `code_management`, `resume` (= `description`), `vehicle`, `status`
+  - `record_technical`: los registros de campo del caso (`_add_field_records`),
+    más recientes primero, con `source = register_technical`:
+    `id_management_technical`, `code_management`, `resume` (= `description`), `vehicle`, `status`
       (= `record_status`), `approval_status` (= `status` del flujo),
-      `technical_staff`, `materials` e `images` (rutas públicas
+      `technical_staff`, `materials` (`id_material`, `id_equipment`, `material`,
+      `other`, `material_description`, `quantity`) e `images` (rutas públicas
       `/uploads/technical/...` de `inspection_documents` del registro; se abren
       con `TECHNICAL_BASE_URL`).
 
@@ -466,8 +468,9 @@ web y se distinguen por `is_field_record`:
   `approve-technical-inspection` (Asistencia) marcan `Aprobado` la gestión y todos
   los registros de campo del caso. La Asistencia se puede aprobar aunque no tenga
   gestión ni registros; la Inspección sigue exigiendo su gestión (404).
-- Registros recientes del técnico: technical-control-ms (`GET /technical_record`)
-  une `technical_record` y los registros de campo (`source`).
+- La app los lista desde `GET /inspection?type=Soporte&type=Asistencia&technical=<id_user>`
+  (`record_technical` de cada caso). "Registros recientes" (technical-control-ms,
+  `GET /technical_record`) sigue mostrando solo los registros de proyectos.
 
   En una Inspección ambos son `[]`. El filtro del técnico (`responsible` /
   `responsible_id`) **no** cambia: sigue siendo el responsable, no el personal
@@ -536,11 +539,9 @@ de `material_delivery_history` como nullable.
   Inspección se envía `[]`. Al editar se carga desde `assigned_technicians`.
 - `components/support-records`: contenido de la fila expandida de un Soporte /
   Asistencia (chips del personal técnico + tabla de `record_technical`, como en
-  Proyectos técnicos) con las mismas acciones: ver detalle (modal con imágenes),
-  descargar el PDF y eliminar (permiso `ELIMINAR_REGISTRO_TECNICO`). El PDF y el
-  borrado usan los endpoints de technical-control-api por `id_record`
-  (`/technical_record/pdf`, `DELETE /technical_record/{id}`), que no requieren
-  proyecto; al eliminar emite `recordDeleted` y la página vuelve a consultar. Lo usan `inspections-technical` en la ruta
+  Proyectos técnicos) con la acción ver detalle (modal con imágenes). Son
+  registros de campo (`id_management_technical`), así que no tienen PDF ni
+  borrado (esos endpoints de technical-control-api trabajan por `id_record`). Lo usan `inspections-technical` en la ruta
   `/soportes-asistencias` (columna para expandir y "N. registros"; `dataKey` es
   `id_inspection`) y la pestaña Soportes / Asistencias de `inspections-approval`.
 - `tickets-technical`: la Asistencia aparece en pendientes para "Registro" (formulario

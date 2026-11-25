@@ -28,7 +28,6 @@ from swagger_server.models.db.sale_quotation import SaleQuotation
 from swagger_server.models.db.sale_quotation_item import SaleQuotationItem
 from swagger_server.models.db.task_technical import TaskTechnical
 from swagger_server.models.db.task_technical_assignments import TaskTechnicalAssignment
-from swagger_server.models.db.tech_record_image import TechRecordImage
 from swagger_server.models.db.tech_staff_record import TechStaffRecord
 from swagger_server.models.db.technical_equipment import TechnicalEquipment
 from swagger_server.models.db.technical_record import TechnicalRecord
@@ -45,6 +44,7 @@ from swagger_server.utils.inspection_documents import (
     remove_documents,
     save_document,
     save_field_record_image,
+    validate_images,
     validate_documents,
 )
 
@@ -747,6 +747,7 @@ class InternalManagementRepository:
                 is_field_record = bool(body.get('field_record'))
                 if is_field_record:
                     self._ensure_field_record_allowed(inspection)
+                    validate_images(files)
                 else:
                     self._ensure_not_support(inspection)
 
@@ -1651,6 +1652,7 @@ class InternalManagementRepository:
     def _update_field_record(self, session, ticket, management, body, files, saved_paths):
         """Actualiza un registro de campo de la app (no toca el flujo)."""
         self._ensure_field_record_allowed(ticket)
+        validate_images(files)
         self._apply_fields(
             management,
             body,
@@ -3135,9 +3137,10 @@ class InternalManagementRepository:
         )
 
     def _support_staff(self, session, inspections):
-        """Personal técnico y registros técnicos (technical_record) de los
-        Soportes / Asistencias: {id_inspection: {"technicians", "records"}}.
-        Las Inspecciones no tienen (usan el proyecto)."""
+        """Personal técnico y registros técnicos de campo (/register-technical) de
+        los Soportes / Asistencias: {id_inspection: {"technicians", "records"}}.
+        Las Inspecciones no tienen (usan el proyecto). technical.technical_record
+        ya no se consulta: queda solo para Proyectos técnicos."""
         ids = [
             inspection.id_inspection
             for inspection in inspections
@@ -3161,43 +3164,6 @@ class InternalManagementRepository:
                 "id_user": assignment.user_id,
                 "user": user,
                 "fullname": fullname,
-            })
-
-        records = session.execute(
-            select(TechnicalRecord)
-            .where(TechnicalRecord.inspection_id.in_(ids))
-            .order_by(TechnicalRecord.created_at.desc(), TechnicalRecord.id_record.desc())
-        ).scalars().all()
-        images = {}
-        if records:
-            for record_id, image_path in session.execute(
-                select(TechRecordImage.record_id, TechRecordImage.image_path)
-                .where(
-                    TechRecordImage.record_id.in_([record.id_record for record in records]),
-                    TechRecordImage.image_path.is_not(None),
-                )
-                .order_by(TechRecordImage.id_image)
-            ).all():
-                images.setdefault(record_id, []).append(image_path)
-        for record in records:
-            staff[record.inspection_id]["records"].append({
-                # Flujo anterior: technical-control-ms (technical.technical_record)
-                "source": "technical_record",
-                "id_record": record.id_record,
-                "id_management_technical": None,
-                "inspection_id": record.inspection_id,
-                "task_id": record.task_id,
-                "client_id": record.client_id,
-                "location_id": record.location_id,
-                "resume": record.resume,
-                "vehicle": record.vehicle,
-                "status": record.status,
-                "created_by": record.created_by,
-                "updated_by": record.updated_by,
-                "created_at": record.created_at,
-                "updated_at": record.updated_at,
-                # Rutas relativas, como en Proyectos técnicos (se sirven desde apiTicket)
-                "images": images.get(record.id_record, []),
             })
 
         staff = self._add_field_records(session, ids, staff)
@@ -3263,7 +3229,10 @@ class InternalManagementRepository:
             materials.setdefault(material.tech_ticket, []).append({
                 "id_material": material.id_material,
                 "id_equipment": material.material_id,
-                "material": equipment.product if equipment else material.material_description,
+                "material": equipment.product if equipment else (material.other or material.material_description),
+                # Producto nuevo (sin material_id): la web lo edita con other / material_description
+                "other": material.other,
+                "material_description": material.material_description,
                 "quantity": material.quantity,
             })
 
