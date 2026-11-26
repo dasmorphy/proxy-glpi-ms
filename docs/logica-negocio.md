@@ -483,6 +483,23 @@ web y se distinguen por `is_field_record`:
 
 ### Aprobación comercial de la Asistencia
 
+> **TEMPORAL (2026-11-26): el descuento de bodega está desactivado.** Las llamadas
+> a `_discount_assistance_materials` en `post_ticket_commercial` y
+> `update_ticket_commercial` están comentadas: al aprobarse, la Asistencia pasa a
+> Financiera y genera sus pendientes, pero no crea la entrega automática, no
+> descuenta stock ni valida que alcance (el paso 3 de abajo no se ejecuta). Las
+> entregas de bodega a proyectos (`post_material_delivery`) siguen descontando.
+> Las Asistencias aprobadas en este período no se descuentan al reactivarlo (ya
+> están en Financiera y bloqueadas). Los tests del descuento están marcados con
+> `@DISCOUNT_DISABLED` en `test_assistance_financial.py`.
+
+Mientras está en Comercial, `next_area` es el área a la que pasará al aprobarse
+(`_area_after_commercial`): `Financiera` para la Asistencia y `Proyectos` para la
+Inspección. Se asigna al entrar a Comercial (crear o editar con `Listo para
+cotizar`, `approve-technical-inspection`, devolver a Comercial, guardar la gestión
+comercial sin aprobar) y se recalcula si el tipo cambia entre Inspección y
+Asistencia estando en Comercial.
+
 Cuando la gestión comercial de una Asistencia pasa a Aprobada (`status_id = 5`):
 en `post_ticket_commercial`, o en `update_ticket_commercial` estando en Comercial.
 Todo va en la misma transacción que la aprobación:

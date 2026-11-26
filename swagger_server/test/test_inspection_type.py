@@ -336,7 +336,8 @@ class TestAssistanceType(unittest.TestCase):
 
         self.assertEqual("Asistencia", inspection.type)
         self.assertEqual("Comercial", inspection.management_area)
-        self.assertEqual("Proyectos", inspection.next_area)
+        # Al aprobarse en Comercial pasa directo a Financiera
+        self.assertEqual("Financiera", inspection.next_area)
 
     def test_new_assistance_starts_in_technical(self):
         inspection = create(self.repository, type="Asistencia")
@@ -395,7 +396,7 @@ class TestAssistanceType(unittest.TestCase):
             self.assertTrue(approved.approve_support)
             self.assertEqual("Listo para cotizar", approved.status)
             self.assertEqual("Comercial", approved.management_area)
-            self.assertEqual("Proyectos", approved.next_area)
+            self.assertEqual("Financiera", approved.next_area)
             self.assertEqual("Aprobado", register.status)
 
         # Ya puede registrarse la gestión comercial

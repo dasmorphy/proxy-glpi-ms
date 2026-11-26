@@ -553,7 +553,11 @@ class InternalManagementRepository:
                     current_area, next_area = "Técnica", None
                 else:
                     current_area = "Comercial" if body.get("status") == "Listo para cotizar" else "Técnica"
-                    next_area = "Proyectos" if current_area == "Comercial" else "Comercial"
+                    next_area = (
+                        self._area_after_commercial(inspection_type)
+                        if current_area == "Comercial"
+                        else "Comercial"
+                    )
 
                 new_inspection = InspectionTechnical(
                     type=inspection_type,
@@ -662,6 +666,9 @@ class InternalManagementRepository:
                         inspection.approve_support = False
                         if inspection.next_area is None:
                             inspection.next_area = "Comercial"
+                    elif inspection.management_area == "Comercial":
+                        # Inspección <-> Asistencia en Comercial: cambia a dónde irá
+                        inspection.next_area = self._area_after_commercial(inspection_type)
 
                 self._apply_fields(
                     inspection,
@@ -702,7 +709,7 @@ class InternalManagementRepository:
                     and self._follows_flow(inspection)
                 ):
                     inspection.management_area = "Comercial"
-                    inspection.next_area = "Proyectos"
+                    inspection.next_area = self._area_after_commercial(inspection.type)
 
                     new_history_area = HistoryAreaTicket(
                         ticket_id=inspection.id_inspection,
@@ -1010,7 +1017,7 @@ class InternalManagementRepository:
 
                 else:
                     ticket.management_area = 'Comercial'
-                    ticket.next_area = 'Proyectos'
+                    ticket.next_area = self._area_after_commercial(ticket.type)
 
                 new_register = CommercialTicketManagement(
                     ticket_id=ticket.id_inspection,
@@ -1063,9 +1070,11 @@ class InternalManagementRepository:
                         self._generate_pending_materials(
                             session, sale_quotation.id_quote, body.get('user')
                         )
-                        self._discount_assistance_materials(
-                            session, sale_quotation.id_quote, body.get('user')
-                        )
+                        # TEMPORAL: descuento de bodega de la Asistencia desactivado
+                        # (docs/logica-negocio.md, sección 3). Descomentar para reactivarlo.
+                        # self._discount_assistance_materials(
+                        #     session, sale_quotation.id_quote, body.get('user')
+                        # )
                 self._save_inspection_documents(
                     session, ticket.id_inspection, files, saved_paths
                 )
@@ -1772,11 +1781,13 @@ class InternalManagementRepository:
                 if approving:
                     # La Asistencia va directo a Financiera; el resto, a Proyectos
                     self._move_on_commercial_approval(session, ticket, body.get('user'))
-                    if self._is_assistance(ticket) and sale_quotation is not None:
-                        # Descuenta el stock con las cantidades de la proforma aprobada
-                        self._discount_assistance_materials(
-                            session, sale_quotation.id_quote, body.get('user')
-                        )
+                    # TEMPORAL: descuento de bodega de la Asistencia desactivado
+                    # (docs/logica-negocio.md, sección 3). Descomentar para reactivarlo.
+                    # if self._is_assistance(ticket) and sale_quotation is not None:
+                    #     # Descuenta el stock con las cantidades de la proforma aprobada
+                    #     self._discount_assistance_materials(
+                    #         session, sale_quotation.id_quote, body.get('user')
+                    #     )
 
                 self._save_inspection_documents(
                     session, ticket.id_inspection, files, saved_paths
@@ -1924,7 +1935,7 @@ class InternalManagementRepository:
 
                 if inspection.management_area == "Técnica":
                     inspection.management_area = "Comercial"
-                    inspection.next_area = "Proyectos"
+                    inspection.next_area = self._area_after_commercial(inspection.type)
 
                     new_history_area = HistoryAreaTicket(
                         ticket_id=inspection.id_inspection,
@@ -2216,7 +2227,7 @@ class InternalManagementRepository:
                 management.status_id = self.COMMERCIAL_STATUS_PENDING
                 management.updated_by = user
                 inspection.management_area = "Comercial"
-                inspection.next_area = "Proyectos"
+                inspection.next_area = self._area_after_commercial(inspection.type)
                 inspection.updated_by = user
                 inspection.updated_at = datetime.now()
                 session.add(HistoryAreaTicket(
@@ -3338,10 +3349,17 @@ class InternalManagementRepository:
         return inspection.type == cls.ASSISTANCE_TYPE
 
     @classmethod
+    def _area_after_commercial(cls, inspection_type):
+        """Área a la que pasa el registro al aprobarse la gestión comercial: la
+        Asistencia va directo a Financiera y el resto a Proyectos. Es también el
+        next_area mientras el registro está en Comercial."""
+        return "Financiera" if inspection_type == cls.ASSISTANCE_TYPE else "Proyectos"
+
+    @classmethod
     def _move_on_commercial_approval(cls, session, ticket, user):
         """Al aprobarse la gestión comercial (estado 5) el registro sale de
         Comercial: la Asistencia va directo a Financiera y el resto a Proyectos."""
-        target = "Financiera" if cls._is_assistance(ticket) else "Proyectos"
+        target = cls._area_after_commercial(ticket.type)
         ticket.management_area = target
         ticket.next_area = "Financiera"
         session.add(HistoryAreaTicket(

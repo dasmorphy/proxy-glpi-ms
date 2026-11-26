@@ -1,6 +1,7 @@
 """Asistencias: al aprobarse la gestión comercial (estado 5) pasan directo a
 Financiera y descuentan el stock con una entrega automática (sección 3 de
 docs/logica-negocio.md)."""
+from datetime import datetime
 from types import SimpleNamespace
 import unittest
 
@@ -19,6 +20,9 @@ from swagger_server.test.test_inspection_ready_for_project import (
     build_repository,
     inspection,
 )
+from swagger_server.test.test_inspection_type import (
+    sqlite_repository as inspection_sqlite_repository,
+)
 from swagger_server.test.test_return_to_commercial import sqlite_repository
 from swagger_server.uses_cases.internal_management_use_case import (
     InternalManagementUseCase,
@@ -26,6 +30,10 @@ from swagger_server.uses_cases.internal_management_use_case import (
 
 APPROVED = 5
 PENDING = 7
+
+# TEMPORAL: el descuento de bodega de la Asistencia está desactivado
+# (_discount_assistance_materials comentado). Quitar al reactivarlo.
+DISCOUNT_DISABLED = unittest.skip("Descuento de asistencias desactivado temporalmente")
 
 
 def quotation(camera_quantity=4):
@@ -99,6 +107,25 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
         self.assertEqual(("Comercial", "Financiera"),
                          (history.previous_area, history.current_area))
 
+    def test_approval_does_not_discount_while_disabled(self):
+        # TEMPORAL: quitar al reactivar el descuento
+        self.approve()
+
+        self.assertEqual({100: 5, 200: 30}, self.stock())
+        self.assertEqual([], self.deliveries())
+        with self.session() as session:
+            self.assertEqual("Financiera", session.get(InspectionTechnical, 50).management_area)
+            # Los pendientes de productos nuevos se siguen generando
+            self.assertEqual(1, len(session.execute(select(PendingMaterial)).scalars().all()))
+
+    def test_insufficient_stock_does_not_block_approval_while_disabled(self):
+        # TEMPORAL: sin descuento no se valida el stock
+        self.approve(quotation(camera_quantity=50))
+
+        with self.session() as session:
+            self.assertEqual("Financiera", session.get(InspectionTechnical, 50).management_area)
+
+    @DISCOUNT_DISABLED
     def test_approval_discounts_stock_with_the_proforma_quantities(self):
         self.approve()
 
@@ -109,6 +136,7 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
                          (history.task_id, history.delivered_to, history.created_by,
                           history.observation))
 
+    @DISCOUNT_DISABLED
     def test_labor_and_bundle_line_are_not_delivered(self):
         self.approve()
 
@@ -124,6 +152,7 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
             [(False, 0, 3), (False, 100, 4), (True, 100, 1), (True, 200, 20)], lines
         )
 
+    @DISCOUNT_DISABLED
     def test_new_product_is_delivered_with_its_pending_without_stock(self):
         self.approve()
 
@@ -143,6 +172,7 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
         with self.session() as session:
             self.assertEqual(7, session.get(TechnicalEquipment, equipment_id).stock)
 
+    @DISCOUNT_DISABLED
     def test_insufficient_stock_rejects_approval_without_changes(self):
         # Cámara: 5 + 1 > 5 disponibles
         self.assert_rejected(
@@ -163,6 +193,7 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
         self.assertEqual({100: 5, 200: 30}, self.stock())
         self.assertEqual([], self.deliveries())
 
+    @DISCOUNT_DISABLED
     def test_post_with_approved_status_also_discounts(self):
         with self.session() as session:
             session.delete(session.get(CommercialTicketManagement, 9))
@@ -178,6 +209,7 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
         with self.session() as session:
             self.assertEqual("Financiera", session.get(InspectionTechnical, 50).management_area)
 
+    @DISCOUNT_DISABLED
     def test_approved_assistance_cannot_change_proforma_or_status(self):
         self.approve()
 
@@ -244,6 +276,58 @@ class TestAssistanceGoesToFinancial(unittest.TestCase):
         self.assertEqual({100: 5, 200: 30}, self.stock())
         with self.session() as session:
             self.assertEqual("Financiera", session.get(InspectionTechnical, 50).management_area)
+
+
+class TestNextAreaInCommercial(unittest.TestCase):
+    """Mientras está en Comercial, next_area es a donde irá al aprobarse:
+    Financiera para la Asistencia y Proyectos para la Inspección."""
+
+    def setUp(self):
+        self.repository = inspection_sqlite_repository()
+        with self.session() as session:
+            session.add_all([
+                InspectionTechnical(id_inspection=60, code="INS-60", type="Asistencia",
+                                    management_area="Técnica", next_area="Comercial",
+                                    start_date=datetime(2026, 11, 20, 8),
+                                    end_date=datetime(2026, 11, 20, 12)),
+                InspectionTechnical(id_inspection=61, code="INS-61", type="Inspección",
+                                    management_area="Comercial", next_area="Proyectos"),
+            ])
+            session.commit()
+
+    def session(self):
+        return self.repository.db_telearseg.session_factory()
+
+    def next_area(self, id_inspection):
+        with self.session() as session:
+            return session.get(InspectionTechnical, id_inspection).next_area
+
+    def test_technical_approval_points_assistance_to_financial(self):
+        self.repository.approve_technical_inspection(
+            {"id_inspection": 60, "user": "jefe_tecnico"}, "i", "e"
+        )
+
+        self.assertEqual("Financiera", self.next_area(60))
+
+    def test_ready_to_quote_points_assistance_to_financial(self):
+        self.repository.update_inspection_technical(
+            60, {"status": "Listo para cotizar", "user": "tecnico"}, "i", "e"
+        )
+
+        self.assertEqual("Financiera", self.next_area(60))
+
+    def test_type_change_in_commercial_updates_next_area(self):
+        self.repository.update_inspection_technical(
+            61, {"type": "Asistencia", "user": "tecnico",
+                 "start_date": "2026-11-20T08:00:00", "end_date": "2026-11-20T12:00:00"},
+            "i", "e",
+        )
+        self.assertEqual("Financiera", self.next_area(61))
+
+        self.repository.update_inspection_technical(
+            61, {"type": "Inspección", "user": "tecnico"}, "i", "e"
+        )
+        self.assertEqual("Proyectos", self.next_area(61))
 
 
 def listed(**overrides):
